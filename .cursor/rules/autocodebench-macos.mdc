@@ -1,0 +1,39 @@
+---
+description: AutoCodeBench macOS app – Swift/SwiftUI, MCPs, resumability
+alwaysApply: true
+---
+
+# AutoCodeBench macOS app
+
+## Skills and docs
+
+- **Dimillian/Skills**: Use [github.com/Dimillian/Skills](https://github.com/Dimillian/Skills) for Swift/SwiftUI and Liquid Glass. Follow:
+  - `swiftui-liquid-glass` for `glassEffect`/`GlassEffectContainer` usage and modifier ordering.
+  - `swiftui-ui-patterns` for view composition and navigation patterns.
+  - `swiftui-view-refactor` for Observation and dependency injection.
+  - `swiftui-performance-audit` for table/scroll performance.
+  - `ios-debugger-agent` for build/run/debug workflows (adapt for macOS with XcodeBuildMCP).
+  - `swift-concurrency-expert` for Sendable/actor isolation in async services.
+- **Sosumi MCP**: Use for official Apple API or HIG when a skill doesn’t cover it.
+  - Search first: `searchAppleDocumentation` (e.g. "SwiftUI glassEffect", "NavigationSplitView").
+  - Fetch detail: `fetchAppleDocumentation` with the returned doc path.
+- **XcodeBuildMCP**: Use for all build and test (discover project, session defaults, build_macos, test_macos). Do not run raw `xcodebuild` unless the MCP cannot do the task.
+
+## Build and test workflow
+
+- `discover_projs` in repo root to find workspace/project.
+- `session-set-defaults` with workspace or project path and scheme.
+- `build_macos` for compile checks; `build_run_macos` for quick manual verification.
+- `test_macos` for unit/UI tests when present.
+
+## Key references
+
+- AutoCodeBenchmark sandbox runner: https://github.com/Tencent-Hunyuan/AutoCodeBenchmark/blob/main/call_sandbox.py
+- Sandbox image: `hunyuansandbox/multi-language-sandbox:v1` (port 8080).
+- Apple HIG: https://developer.apple.com/design/human-interface-guidelines/
+
+## Project conventions
+
+- Run state and run output live under Application Support/AutoCodeBench/runs.
+- Inference is triggered from Run tab; only run inference for items without output.
+- Persist run state after each batch (resumability).
