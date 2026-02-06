@@ -241,6 +241,7 @@
 		8BC2657C2DEDD3F500F279A4 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				SWIFT_VERSION = 5.0;
 			};
 			name = Debug;

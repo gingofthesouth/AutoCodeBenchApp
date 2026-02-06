@@ -52,26 +52,38 @@ public struct EvaluationService: Sendable {
         return decoded
     }
 
-    /// Evaluate full and demo test for one row; returns true only if both pass.
-    public func evaluateRow(_ row: BenchmarkRow) async throws -> Bool {
+    /// Evaluate full and demo test for one row; returns (passed, duration in seconds). Passed only if both pass.
+    public func evaluateRow(_ row: BenchmarkRow) async throws -> (passed: Bool, duration: TimeInterval) {
+        let start = Date()
         let code = Self.extractCode(
             from: row.output ?? "",
             language: row.language,
             canonicalSolution: row.canonicalSolution
         )
-        if code.isEmpty { return false }
+        if code.isEmpty { return (false, Date().timeIntervalSince(start)) }
         let fullPassed = try await submit(funcCode: code, mainCode: row.fullTestFunc ?? "", lang: row.language).execOutcome == "PASSED"
         let demoPassed = try await submit(funcCode: code, mainCode: row.demoTestFunc ?? "", lang: row.language).execOutcome == "PASSED"
-        return fullPassed && demoPassed
+        let duration = Date().timeIntervalSince(start)
+        return (fullPassed && demoPassed, duration)
     }
 
     /// Run evaluation on all rows and return pass count.
+    /// - Parameter progress: (completed, total) after each row.
     public func evaluateAll(rows: [BenchmarkRow], progress: @escaping @Sendable (Int, Int) -> Void) async throws -> (passed: Int, total: Int) {
+        try await evaluateAll(rows: rows) { completed, total, passed in
+            progress(completed, total)
+        }
+    }
+
+    /// Run evaluation on all rows; progress reports (completed, total, passed) for live pass rate.
+    /// If onRowResult is provided, it is called after each row with (index, passed, durationSeconds, language) for persistence.
+    public func evaluateAll(rows: [BenchmarkRow], progress: @escaping @Sendable (Int, Int, Int) -> Void, onRowResult: (@Sendable (Int, Bool, TimeInterval, String) -> Void)? = nil) async throws -> (passed: Int, total: Int) {
         var passed = 0
         for (i, row) in rows.enumerated() {
-            let ok = (try? await evaluateRow(row)) ?? false
+            let (ok, duration) = (try? await evaluateRow(row)) ?? (false, 0)
             if ok { passed += 1 }
-            progress(i + 1, rows.count)
+            progress(i + 1, rows.count, passed)
+            onRowResult?(i, ok, duration, row.language)
         }
         return (passed, rows.count)
     }

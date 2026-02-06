@@ -1,7 +1,9 @@
 import SwiftUI
 
+/// Run tab landing: "New run" button (presents RunSetupSheet) and recent runs with Pause/Resume.
 public struct RunSetupView: View {
     @Bindable var state: AppState
+    @State private var runSetupSheetItem: RunSetupSheetItem?
     @State private var selectedRunForResume: RunState?
 
     public init(state: AppState) {
@@ -9,94 +11,25 @@ public struct RunSetupView: View {
     }
 
     public var body: some View {
-        Form {
-            Section("Model") {
-                Picker("Provider", selection: Binding(get: { state.selectedProviderId ?? "" }, set: { state.selectedProviderId = $0 })) {
-                    Text("Select…").tag("")
-                    ForEach(state.providers) { p in
-                        Text(p.name).tag(p.id)
-                    }
-                }
-                .onChange(of: state.selectedProviderId) { _, _ in
-                    Task { await state.fetchAvailableModels() }
-                }
-                if state.isLoadingModels {
-                    ProgressView("Loading models…")
-                } else if let pid = state.selectedProviderId {
-                    Picker("Model", selection: Binding(get: { state.selectedModelId ?? "" }, set: { state.selectedModelId = $0 })) {
-                        Text("Select…").tag("")
-                        ForEach(state.availableModels) { model in
-                            Text(model.displayName).tag(model.id)
-                        }
-                    }
-                    .disabled(state.availableModels.isEmpty)
-                }
-                if let err = state.modelListingError {
-                    Text(err)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                newRunCard
+                recentRunsSection
+                if let msg = state.errorMessage {
+                    Text(msg)
                         .font(.caption)
                         .foregroundStyle(.red)
                 }
             }
-            Section("Languages") {
-                Text("\(state.selectedLanguages.count) selected (see Dataset)")
-                    .foregroundStyle(.secondary)
-            }
-            Section("Run") {
-                if state.isRunningInference {
-                    if let (c, t) = state.inferenceProgress {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Inference \(c)/\(t) problems")
-                                .font(.headline)
-                            ProgressView(value: Double(c), total: Double(max(t, 1))) {
-                                if c < t {
-                                    Text("Processing problem \(c + 1) of \(t)…")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                            .progressViewStyle(.linear)
-                        }
-                    } else {
-                        ProgressView("Starting run…")
-                    }
-                    Button("Pause") { state.pauseRun() }
-                } else {
-                    Button("Start run") {
-                        Task { await state.startRun() }
-                    }
-                    .disabled(state.selectedProviderId == nil || state.selectedModelId?.isEmpty == true || state.selectedLanguages.isEmpty)
-                }
-            }
-            Section("Resume") {
-                Button("Load runs") { state.loadRuns() }
-                ForEach(state.runs.filter { $0.status == .inProgress || $0.status == .paused }, id: \.runId) { run in
-                    HStack {
-                        VStack(alignment: .leading) {
-                            Text(run.modelId)
-                            Text("\(run.completedIndices.count) / \(run.languages.joined(separator: ", "))")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Button("Resume") {
-                            selectedRunForResume = run
-                        }
-                    }
-                }
-            }
-            if let msg = state.errorMessage {
-                Section {
-                    Text(msg)
-                        .foregroundStyle(.red)
-                }
-            }
+            .padding(24)
         }
-        .formStyle(.grouped)
         .navigationTitle("Run")
         .onAppear {
             state.loadRuns()
-            if state.selectedProviderId != nil && state.availableModels.isEmpty && !state.isLoadingModels {
-                Task { await state.fetchAvailableModels() }
+        }
+        .sheet(item: $runSetupSheetItem) { _ in
+            RunSetupSheet(state: state) {
+                runSetupSheetItem = nil
             }
         }
         .task(id: selectedRunForResume?.runId) {
@@ -105,4 +38,77 @@ public struct RunSetupView: View {
             await state.resumeRun(run)
         }
     }
+
+    private var newRunCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Start a new benchmark run")
+                .font(.title2)
+            Text("Configure provider, model, and options, then start. You’ll be taken to the run when it starts.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Button("New run") {
+                runSetupSheetItem = RunSetupSheetItem()
+            }
+            .buttonStyle(.glassProminent)
+        }
+        .padding(20)
+        .glassCard(cornerRadius: 16)
+    }
+
+    private var recentRunsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Recent runs")
+                    .font(.headline)
+                Spacer()
+                Button("Load runs") { state.loadRuns() }
+                    .buttonStyle(.glass)
+            }
+            if state.runs.isEmpty {
+                Text("No runs yet. Tap \"New run\" to start.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(state.runs.prefix(5), id: \.runId) { run in
+                    let progress = state.liveProgress[run.runId]
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(run.modelId)
+                            Text(String(run.runId.prefix(8)) + "…")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            if let p = progress, p.inferenceTotal > 0 {
+                                ProgressView(value: Double(p.inferenceCompleted), total: Double(p.inferenceTotal)) {
+                                    Text("\(p.inferenceCompleted)/\(p.inferenceTotal)")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                                .progressViewStyle(.linear)
+                            } else {
+                                Text("\(run.completedIndices.count) / \(run.languages.joined(separator: ", "))")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        Spacer()
+                        if run.status == .inProgress {
+                            Button("Pause") { state.pauseRun(runId: run.runId) }
+                                .buttonStyle(.glass)
+                        } else if run.status == .paused {
+                            Button("Resume") {
+                                selectedRunForResume = run
+                            }
+                            .buttonStyle(.glass)
+                        }
+                    }
+                    .padding(12)
+                    .glassCard(cornerRadius: 12)
+                }
+            }
+        }
+    }
+}
+
+#Preview {
+    RunSetupView(state: .preview())
 }

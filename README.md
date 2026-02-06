@@ -1,129 +1,105 @@
-# AutoCodeBench - macOS App
+# AutoCodeBench
 
-A modern macOS application using a **workspace + SPM package** architecture for clean separation between app shell and feature code.
+A macOS app for benchmarking code-generation LLMs using the [AutoCodeBench](https://github.com/Tencent-Hunyuan/AutoCodeBenchmark) dataset with automated sandbox evaluation.
+
+## Overview
+
+AutoCodeBench lets you run inference with multiple providers (Anthropic, OpenAI, OpenRouter, LM Studio, Ollama, and custom endpoints), evaluate model outputs against the AutoCodeBench test suite via a Docker sandbox, and view results in a dashboard with pass@1, timing, and token usage.
+
+## Screenshots
+
+| Dashboard — summary stats and Pass@1 charts (by model, language, provider, over time) | Runs — inference list and run detail (per-problem inference and evaluation) |
+|----------------------------------------------------------------------------------------|-----------------------------------------------------------------------------|
+| ![Dashboard](screenshots/dashboard.png)                                                | ![Runs and run detail](screenshots/runs-and-detail.png)                      |
+
+| Dashboard with developer view (local server, loaded models, inference logs) |
+|----------------------------------------------------------------------------|
+| ![Developer view and dashboard](screenshots/developer-and-dashboard.png)   |
+
+## Features
+
+- **Multi-provider inference** — Configure API keys and base URLs for Anthropic, OpenAI, OpenRouter, LM Studio, Ollama, or a custom endpoint
+- **Resumable runs** — Pause and resume runs; inference skips problems that already have output
+- **Sandbox evaluation** — Automatic evaluation using the [MultiLanguageSandbox](https://github.com/Tencent-Hunyuan/AutoCodeBenchmark) Docker image (full and demo tests)
+- **Results dashboard** — Charts and statistics: pass@1 by model, language, provider; timing and token efficiency
+- **Dataset management** — Download the AutoCodeBench dataset (JSONL) from Hugging Face; select languages and problems per run
+
+## Requirements
+
+- **macOS 26.0+**
+- **Xcode 26+** (Swift 6.2)
+- **Docker** — For sandbox evaluation (e.g. `hunyuansandbox/multi-language-sandbox:v1` on port 8080). Optional if you only run inference and evaluate elsewhere.
+
+## Getting Started
+
+### Clone the repository
+
+```bash
+git clone https://github.com/gingofthesouth/AutoCodeBenchApp.git
+cd AutoCodeBenchApp
+```
+
+### Build and run in Xcode
+
+1. Open the workspace in Xcode (use the workspace, not the project):
+   ```bash
+   open AutoCodeBench.xcworkspace
+   ```
+2. Select the **AutoCodeBench** scheme.
+3. Build and run (**⌘R**).
+
+### First-time setup in the app
+
+1. **Prerequisites** — Download the AutoCodeBench dataset (via the app or the bundled script). Ensure Docker is running if you want in-app evaluation.
+2. **Providers** — Add API keys or base URLs for your chosen inference providers in **Providers**.
+3. **Run** — Create a run (model, languages, temperature, max tokens), start inference, then evaluate when inference completes (or use streaming evaluation).
+
+## Usage
+
+- **Dashboard** — Summary stats and charts across runs.
+- **Models** — List available models per provider.
+- **Prerequisites** — Dataset download and sandbox diagnostics (Homebrew, Docker, Colima, sandbox image).
+- **Run** — Configure and start a run; pause/resume or delete.
+- **Runs** — List runs and open run details.
+- **Results** — Per-run results, per-problem pass/fail, and performance metrics.
+
+Run state and outputs are stored under `~/Library/Application Support/AutoCodeBench/` (runs, dataset cache, results database, provider config). Provider API keys are stored there and are not committed to the repo.
 
 ## Project Architecture
 
+The app uses a **workspace + SPM package** layout:
+
 ```
-AutoCodeBench/
-├── AutoCodeBench.xcworkspace/              # Open this file in Xcode
-├── AutoCodeBench.xcodeproj/                # App shell project
-├── AutoCodeBench/                          # App target (minimal)
-│   ├── Assets.xcassets/                # App-level assets (icons, colors)
-│   ├── AutoCodeBenchApp.swift              # App entry point
-│   ├── AutoCodeBench.entitlements          # App sandbox settings
-│   └── AutoCodeBench.xctestplan            # Test configuration
-├── AutoCodeBenchPackage/                   # 🚀 Primary development area
-│   ├── Package.swift                   # Package configuration
-│   ├── Sources/AutoCodeBenchFeature/       # Your feature code
-│   └── Tests/AutoCodeBenchFeatureTests/    # Unit tests
-└── AutoCodeBenchUITests/                   # UI automation tests
-```
-
-## Key Architecture Points
-
-### Workspace + SPM Structure
-- **App Shell**: `AutoCodeBench/` contains minimal app lifecycle code
-- **Feature Code**: `AutoCodeBenchPackage/Sources/AutoCodeBenchFeature/` is where most development happens
-- **Separation**: Business logic lives in the SPM package, app target just imports and displays it
-
-### Buildable Folders (Xcode 16)
-- Files added to the filesystem automatically appear in Xcode
-- No need to manually add files to project targets
-- Reduces project file conflicts in teams
-
-### App Sandbox
-The app is sandboxed by default with basic file access permissions. Modify `AutoCodeBench.entitlements` to add capabilities as needed.
-
-## Development Notes
-
-### Code Organization
-Most development happens in `AutoCodeBenchPackage/Sources/AutoCodeBenchFeature/` - organize your code as you prefer.
-
-### Public API Requirements
-Types exposed to the app target need `public` access:
-```swift
-public struct SettingsView: View {
-    public init() {}
-    
-    public var body: some View {
-        // Your view code
-    }
-}
+AutoCodeBenchApp/
+├── AutoCodeBench.xcworkspace     # Open this in Xcode
+├── AutoCodeBench.xcodeproj       # App shell project
+├── AutoCodeBench/                # App target (entry point, assets)
+├── AutoCodeBenchPackage/         # SPM package — feature code
+│   ├── Package.swift
+│   ├── Sources/AutoCodeBenchFeature/   # Views, services, models
+│   └── Tests/AutoCodeBenchFeatureTests/
+├── AutoCodeBenchUITests/         # UI tests
+└── Config/                       # XCConfig and entitlements
 ```
 
-### Adding Dependencies
-Edit `AutoCodeBenchPackage/Package.swift` to add SPM dependencies:
-```swift
-dependencies: [
-    .package(url: "https://github.com/example/SomePackage", from: "1.0.0")
-],
-targets: [
-    .target(
-        name: "AutoCodeBenchFeature",
-        dependencies: ["SomePackage"]
-    ),
-]
-```
+The app target is minimal; most code lives in the `AutoCodeBenchFeature` package.
 
-### Test Structure
-- **Unit Tests**: `AutoCodeBenchPackage/Tests/AutoCodeBenchFeatureTests/` (Swift Testing framework)
-- **UI Tests**: `AutoCodeBenchUITests/` (XCUITest framework)
-- **Test Plan**: `AutoCodeBench.xctestplan` coordinates all tests
+## AutoCodeBench dataset and sandbox
 
-## Configuration
+This app is built around the dataset and evaluation pipeline from:
 
-### XCConfig Build Settings
-Build settings are managed through **XCConfig files** in `Config/`:
-- `Config/Shared.xcconfig` - Common settings (bundle ID, versions, deployment target)
-- `Config/Debug.xcconfig` - Debug-specific settings  
-- `Config/Release.xcconfig` - Release-specific settings
-- `Config/Tests.xcconfig` - Test-specific settings
+**[Tencent-Hunyuan/AutoCodeBenchmark](https://github.com/Tencent-Hunyuan/AutoCodeBenchmark)**
 
-### App Sandbox & Entitlements
-The app is sandboxed by default with basic file access. Edit `AutoCodeBench/AutoCodeBench.entitlements` to add capabilities:
-```xml
-<key>com.apple.security.files.user-selected.read-write</key>
-<true/>
-<key>com.apple.security.network.client</key>
-<true/>
-<!-- Add other entitlements as needed -->
-```
+- **Dataset** — AutoCodeBench (e.g. `autocodebench.jsonl` from [Hugging Face](https://huggingface.co/datasets/tencent/AutoCodeBenchmark)); used for problem text, canonical solutions, and test functions.
+- **Sandbox** — [MultiLanguageSandbox](https://github.com/Tencent-Hunyuan/AutoCodeBenchmark) (`hunyuansandbox/multi-language-sandbox:v1`) for running and evaluating code in many languages. The app sends solutions to the sandbox and interprets pass/fail from the response.
 
-## macOS-Specific Features
+See the [AutoCodeBenchmark README](https://github.com/Tencent-Hunyuan/AutoCodeBenchmark) for dataset details, evaluation protocol, and citation.
 
-### Window Management
-Add multiple windows and settings panels:
-```swift
-@main
-struct AutoCodeBenchApp: App {
-    var body: some Scene {
-        WindowGroup {
-            ContentView()
-        }
-        
-        Settings {
-            SettingsView()
-        }
-    }
-}
-```
+## Acknowledgements
 
-### Asset Management
-- **App-Level Assets**: `AutoCodeBench/Assets.xcassets/` (app icon with multiple sizes, accent color)
-- **Feature Assets**: Add `Resources/` folder to SPM package if needed
+- **Tencent Hunyuan** — For the [AutoCodeBenchmark](https://github.com/Tencent-Hunyuan/AutoCodeBenchmark) dataset, evaluation methodology, and MultiLanguageSandbox.
+- **XcodeBuildMCP** — Project was scaffolded with [XcodeBuildMCP](https://github.com/cameroncooke/XcodeBuildMCP) for macOS/Xcode build and test workflows.
 
-### SPM Package Resources
-To include assets in your feature package:
-```swift
-.target(
-    name: "AutoCodeBenchFeature",
-    dependencies: [],
-    resources: [.process("Resources")]
-)
-```
+## License
 
-## Notes
-
-### Generated with XcodeBuildMCP
-This project was scaffolded using [XcodeBuildMCP](https://github.com/cameroncooke/XcodeBuildMCP), which provides tools for AI-assisted macOS development workflows.
+See the [LICENSE](LICENSE) file in this repository.

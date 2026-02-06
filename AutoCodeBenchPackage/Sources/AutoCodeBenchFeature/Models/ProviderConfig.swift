@@ -1,5 +1,12 @@
 import Foundation
 
+/// High-level category for comparing open-weight vs proprietary models.
+public enum ProviderCategory: String, Codable, Sendable, CaseIterable {
+    case proprietary
+    case openWeight
+    case mixed
+}
+
 /// Known inference provider types.
 public enum ProviderKind: String, Codable, Sendable, CaseIterable {
     case anthropic
@@ -8,6 +15,15 @@ public enum ProviderKind: String, Codable, Sendable, CaseIterable {
     case lmStudio
     case ollama
     case custom
+
+    /// Category for dashboard breakdown (open-weight vs proprietary).
+    public var category: ProviderCategory {
+        switch self {
+        case .anthropic, .openai: return .proprietary
+        case .lmStudio, .ollama: return .openWeight
+        case .openRouter, .custom: return .mixed
+        }
+    }
 }
 
 /// Configuration for one inference provider (API key, base URL).
@@ -36,15 +52,44 @@ public struct ProviderConfig: Codable, Sendable, Identifiable {
     }
 }
 
+/// Persistent color assignment for a model variant (provider + model + quantization) used in dashboard charts.
+public struct ModelColorAssignment: Codable, Sendable, Identifiable {
+    public var id: String
+    public var providerId: String
+    public var modelId: String
+    public var modelDisplayName: String
+    public var quantization: String?
+    public var colorHex: String
+
+    public init(id: String, providerId: String, modelId: String, modelDisplayName: String, quantization: String?, colorHex: String) {
+        self.id = id
+        self.providerId = providerId
+        self.modelId = modelId
+        self.modelDisplayName = modelDisplayName
+        self.quantization = quantization
+        self.colorHex = colorHex
+    }
+
+    public static func makeId(providerId: String, modelId: String, quantization: String?) -> String {
+        var key = "\(providerId)::\(modelId)"
+        if let q = quantization, !q.isEmpty { key += "::\(q)" }
+        return key
+    }
+}
+
 /// A model offered by a provider (e.g. claude-sonnet-4, gpt-4o).
 public struct ProviderModel: Sendable, Identifiable {
     public let id: String
     public let displayName: String
     public let providerId: String
+    public let modelKind: String?
+    public let quantization: String?
 
-    public init(id: String, displayName: String, providerId: String) {
+    public init(id: String, displayName: String, providerId: String, modelKind: String? = nil, quantization: String? = nil) {
         self.id = id
         self.displayName = displayName
         self.providerId = providerId
+        self.modelKind = modelKind
+        self.quantization = quantization
     }
 }

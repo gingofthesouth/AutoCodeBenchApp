@@ -4,6 +4,22 @@
 
 ## User settings
 xcuserdata/
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+
+## macOS
+.DS_Store
+
+## Build artifacts
+DerivedData/
+
+## Swift Package Manager
+.swiftpm/
+.build/
+
+# Local IDE and workflow (do not publish)
+.cursor/
+tasks/
 
 ## Obj-C/Swift specific
 *.hmap
@@ -17,19 +33,10 @@ xcuserdata/
 timeline.xctimeline
 playground.xcworkspace
 
-# Swift Package Manager
-#
-# Add this line if you want to avoid checking in source code from Swift Package Manager dependencies.
+# Swift Package Manager (see also .swiftpm/ and .build/ above)
 # Packages/
 # Package.pins
 # Package.resolved
-# *.xcodeproj
-#
-# Xcode automatically generates this directory with a .xcworkspacedata file and xcuserdata
-# hence it is not needed unless you have added a package configuration file to your project
-# .swiftpm
-
-.build/
 
 # CocoaPods
 #

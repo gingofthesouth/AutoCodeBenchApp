@@ -11,7 +11,8 @@ public enum RunStatus: String, Codable, Sendable {
 }
 
 /// Persisted state for a single run so we can resume.
-public struct RunState: Codable, Sendable {
+public struct RunState: Codable, Sendable, Identifiable {
+    public var id: String { runId }
     public let runId: String
     public let modelId: String
     public let providerId: String
@@ -21,6 +22,11 @@ public struct RunState: Codable, Sendable {
     public var status: RunStatus
     public let createdAt: Date
     public var updatedAt: Date
+    public let temperature: Double?
+    public let modelDisplayName: String?
+    public let modelKind: String?
+    public let quantization: String?
+    public let maxOutputTokens: Int?
 
     public init(
         runId: String,
@@ -31,7 +37,12 @@ public struct RunState: Codable, Sendable {
         outputPath: String? = nil,
         status: RunStatus = .inProgress,
         createdAt: Date = Date(),
-        updatedAt: Date = Date()
+        updatedAt: Date = Date(),
+        temperature: Double? = nil,
+        modelDisplayName: String? = nil,
+        modelKind: String? = nil,
+        quantization: String? = nil,
+        maxOutputTokens: Int? = nil
     ) {
         self.runId = runId
         self.modelId = modelId
@@ -42,5 +53,10 @@ public struct RunState: Codable, Sendable {
         self.status = status
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.temperature = temperature
+        self.modelDisplayName = modelDisplayName
+        self.modelKind = modelKind
+        self.quantization = quantization
+        self.maxOutputTokens = maxOutputTokens
     }
 }
