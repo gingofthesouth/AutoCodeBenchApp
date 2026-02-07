@@ -4,6 +4,7 @@ import SwiftUI
 public struct RunsListView: View {
     @Bindable var state: AppState
     @Binding var selectedRunId: String?
+    @State private var resumeSheetItem: ResumeFromProblemSheetItem?
 
     public init(state: AppState, selectedRunId: Binding<String?>) {
         self.state = state
@@ -17,6 +18,12 @@ public struct RunsListView: View {
                     RunRowView(run: run, progress: state.liveProgress[run.runId])
                 }
                 .contextMenu {
+                    if run.status == .paused || run.status == .failed {
+                        Button("Resume") {
+                            let total = state.problemCountForRun(run) ?? run.completedIndices.count
+                            resumeSheetItem = ResumeFromProblemSheetItem(run: run, totalProblems: total)
+                        }
+                    }
                     Button("Delete Run", role: .destructive) {
                         state.deleteRun(runId: run.runId)
                         if selectedRunId == run.runId {
@@ -41,6 +48,11 @@ public struct RunsListView: View {
             } else {
                 ContentUnavailableView("Select a run", systemImage: "play.rectangle")
             }
+        }
+        .sheet(item: $resumeSheetItem) { item in
+            ResumeFromProblemSheet(run: item.run, totalProblems: item.totalProblems, onResume: { idx in
+                Task { await state.resumeRun(item.run, startFromIndex: idx) }
+            }, onDismiss: { resumeSheetItem = nil })
         }
     }
 }

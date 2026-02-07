@@ -13,18 +13,40 @@ public struct EvaluationService: Sendable {
     /// Extract code from model output (markdown code block). Mirrors call_sandbox.py _extract_code_blocks.
     public static func extractCode(from output: String, language: String, canonicalSolution: String?) -> String {
         guard !output.isEmpty else { return "" }
-        let pattern = #"```(\w+)\n(.*?)```"#
+        var text = output
+        if let range = text.range(of: "</think>") {
+            text = String(text[range.upperBound...])
+        }
+        let pattern = #"```\S*\s*(.*?)```"#
         guard let regex = try? NSRegularExpression(pattern: pattern, options: .dotMatchesLineSeparators),
-              let match = regex.firstMatch(in: output, range: NSRange(output.startIndex..., in: output)) else {
-            let trimmed = output.trimmingCharacters(in: CharacterSet(charactersIn: "`"))
-            let lines = trimmed.split(separator: "\n", omittingEmptySubsequences: false)
+              let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) else {
+            var cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if cleaned.hasPrefix("```") { cleaned = String(cleaned.dropFirst(3)) }
+            if cleaned.hasSuffix("```") { cleaned = String(cleaned.dropLast(3)) }
+            let lines = cleaned.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: "\n", omittingEmptySubsequences: false)
             if lines.count > 1 {
                 return lines.dropFirst().joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
             }
-            return trimmed.trimmingCharacters(in: .whitespacesAndNewlines)
+            return cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
         }
-        let codeRange = Range(match.range(at: 2), in: output)!
-        return String(output[codeRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let codeRange = Range(match.range(at: 1), in: text)!
+        var extracted = String(text[codeRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+        if language.lowercased() == "elixir", let solution = canonicalSolution?.trimmingCharacters(in: .whitespacesAndNewlines), !solution.isEmpty {
+            let codeLines = extracted.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+            let solutionLines = solution.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+            guard solutionLines.first?.hasPrefix("defmodule") == true,
+                  solutionLines.last?.hasPrefix("end") == true else {
+                return extracted
+            }
+            let firstCanon = solutionLines[0]
+            let lastCanon = solutionLines[solutionLines.count - 1]
+            if codeLines.first?.hasPrefix("defmodule") == true, codeLines.last?.hasPrefix("end") == true {
+                extracted = ([firstCanon] + codeLines.dropFirst().dropLast() + [lastCanon]).joined(separator: "\n")
+            } else {
+                extracted = ([firstCanon] + codeLines.map { "  " + $0 } + [lastCanon]).joined(separator: "\n")
+            }
+        }
+        return extracted
     }
 
     /// Submit one solution + test to the sandbox.
@@ -52,7 +74,8 @@ public struct EvaluationService: Sendable {
         return decoded
     }
 
-    /// Evaluate full and demo test for one row; returns (passed, duration in seconds). Passed only if both pass.
+    /// Evaluate demo then full test for one row; returns (passed, duration in seconds). Passed only if both pass.
+    /// Runs demo first and skips the full test when demo fails to avoid an extra sandbox call.
     public func evaluateRow(_ row: BenchmarkRow) async throws -> (passed: Bool, duration: TimeInterval) {
         let start = Date()
         let code = Self.extractCode(
@@ -61,10 +84,13 @@ public struct EvaluationService: Sendable {
             canonicalSolution: row.canonicalSolution
         )
         if code.isEmpty { return (false, Date().timeIntervalSince(start)) }
-        let fullPassed = try await submit(funcCode: code, mainCode: row.fullTestFunc ?? "", lang: row.language).execOutcome == "PASSED"
         let demoPassed = try await submit(funcCode: code, mainCode: row.demoTestFunc ?? "", lang: row.language).execOutcome == "PASSED"
+        if !demoPassed {
+            return (false, Date().timeIntervalSince(start))
+        }
+        let fullPassed = try await submit(funcCode: code, mainCode: row.fullTestFunc ?? "", lang: row.language).execOutcome == "PASSED"
         let duration = Date().timeIntervalSince(start)
-        return (fullPassed && demoPassed, duration)
+        return (fullPassed, duration)
     }
 
     /// Run evaluation on all rows and return pass count.

@@ -5,6 +5,7 @@ public struct RunDetailView: View {
     let runId: String
     @Bindable var state: AppState
     var onDeleted: (() -> Void)?
+    @State private var resumeSheetItem: ResumeFromProblemSheetItem?
 
     public init(runId: String, state: AppState, onDeleted: (() -> Void)? = nil) {
         self.runId = runId
@@ -93,6 +94,14 @@ public struct RunDetailView: View {
                             }
                         }
                     }
+                    if run.status == .paused || run.status == .failed {
+                        Section("Actions") {
+                            Button("Resume run") {
+                                let total = state.problemCountForRun(run) ?? run.completedIndices.count
+                                resumeSheetItem = ResumeFromProblemSheetItem(run: run, totalProblems: total)
+                            }
+                        }
+                    }
                     if run.status == .inferenceComplete {
                         Section("Actions") {
                             Button("Run evaluation") {
@@ -124,6 +133,11 @@ public struct RunDetailView: View {
         .navigationTitle(run?.modelId ?? "Run")
         .onAppear {
             state.loadRuns()
+        }
+        .sheet(item: $resumeSheetItem) { item in
+            ResumeFromProblemSheet(run: item.run, totalProblems: item.totalProblems, onResume: { idx in
+                Task { await state.resumeRun(item.run, startFromIndex: idx) }
+            }, onDismiss: { resumeSheetItem = nil })
         }
     }
 

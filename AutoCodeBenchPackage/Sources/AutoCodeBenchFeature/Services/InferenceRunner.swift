@@ -82,7 +82,7 @@ public actor InferenceRunner {
                     maxTokens: state.maxOutputTokens
                 )
             } catch {
-                state.status = .failed
+                state.status = error is CancellationError ? .paused : .failed
                 state.updatedAt = Date()
                 try? persistState()
                 throw error

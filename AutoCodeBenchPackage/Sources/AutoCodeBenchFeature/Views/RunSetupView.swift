@@ -4,7 +4,7 @@ import SwiftUI
 public struct RunSetupView: View {
     @Bindable var state: AppState
     @State private var runSetupSheetItem: RunSetupSheetItem?
-    @State private var selectedRunForResume: RunState?
+    @State private var resumeSheetItem: ResumeFromProblemSheetItem?
 
     public init(state: AppState) {
         self.state = state
@@ -32,10 +32,10 @@ public struct RunSetupView: View {
                 runSetupSheetItem = nil
             }
         }
-        .task(id: selectedRunForResume?.runId) {
-            guard let run = selectedRunForResume else { return }
-            selectedRunForResume = nil
-            await state.resumeRun(run)
+        .sheet(item: $resumeSheetItem) { item in
+            ResumeFromProblemSheet(run: item.run, totalProblems: item.totalProblems, onResume: { idx in
+                Task { await state.resumeRun(item.run, startFromIndex: idx) }
+            }, onDismiss: { resumeSheetItem = nil })
         }
     }
 
@@ -94,9 +94,10 @@ public struct RunSetupView: View {
                         if run.status == .inProgress {
                             Button("Pause") { state.pauseRun(runId: run.runId) }
                                 .buttonStyle(.glass)
-                        } else if run.status == .paused {
+                        } else if run.status == .paused || run.status == .failed {
                             Button("Resume") {
-                                selectedRunForResume = run
+                                let total = state.problemCountForRun(run) ?? run.completedIndices.count
+                                resumeSheetItem = ResumeFromProblemSheetItem(run: run, totalProblems: total)
                             }
                             .buttonStyle(.glass)
                         }

@@ -100,6 +100,28 @@ public final class ResultsStore: Sendable {
         }
     }
 
+    /// Deletes per-problem and aggregate results from a given problem index onward (for resume-from-earlier trim).
+    public func deleteRunProblemResultsFromIndex(runId: String, fromIndex: Int) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            var db: OpaquePointer?
+            guard sqlite3_open_v2(self.dbPath.path, &db, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK else { return }
+            defer { sqlite3_close(db) }
+            var stmt: OpaquePointer?
+            if sqlite3_prepare_v2(db, "DELETE FROM run_problem_results WHERE run_id = ? AND problem_index >= ?;", -1, &stmt, nil) == SQLITE_OK {
+                sqlite3_bind_text(stmt, 1, runId, -1, SQLITE_TRANSIENT)
+                sqlite3_bind_int(stmt, 2, Int32(fromIndex))
+                sqlite3_step(stmt)
+                sqlite3_finalize(stmt)
+            }
+            if sqlite3_prepare_v2(db, "DELETE FROM run_results WHERE run_id = ?;", -1, &stmt, nil) == SQLITE_OK {
+                sqlite3_bind_text(stmt, 1, runId, -1, SQLITE_TRANSIENT)
+                sqlite3_step(stmt)
+                sqlite3_finalize(stmt)
+            }
+        }
+    }
+
     /// Deletes only the evaluation result for a run+language, leaving the run intact.
     /// Clears eval_passed/eval_duration_ms from run_problem_results and removes from run_results.
     public func deleteResult(runId: String, language: String) {

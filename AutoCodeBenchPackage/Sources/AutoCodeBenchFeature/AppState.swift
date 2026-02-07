@@ -45,6 +45,8 @@ public final class AppState {
 
     /// Active inference tasks by runId; used to support multiple concurrent runs and pause by runId.
     private var runningRunTasks: [String: Task<Void, Never>] = [:]
+    /// Runner references so pause/delete can signal cancel() for responsive stop.
+    private var runRunners: [String: InferenceRunner] = [:]
     public var availableModels: [ProviderModel] = []
     public var isLoadingModels = false
     public var modelListingError: String?
@@ -329,6 +331,7 @@ public final class AppState {
             provider = OpenAIProvider(id: providerConfig.id, name: providerConfig.name, apiKey: providerConfig.apiKey, baseURL: base, modelId: modelId)
         }
         let runner = InferenceRunner(provider: provider, datasetService: datasetService, runState: state, problems: problems)
+        runRunners[runId] = runner
         errorMessage = nil
         resultsStore?.saveRun(state)
         liveProgress[runId] = LiveRunProgress(inferenceCompleted: 0, inferenceTotal: problems.count)
@@ -377,15 +380,17 @@ public final class AppState {
                         Task { await self.runEvaluation(runId: runId) }
                     }
                     runningRunTasks.removeValue(forKey: runId)
+                    runRunners.removeValue(forKey: runId)
                 }
             } catch {
                 progressContinuation.finish()
                 _ = await consumerTask.value
                 await MainActor.run {
-                    errorMessage = Self.userFacingMessage(for: error)
+                    if !(error is CancellationError) { errorMessage = Self.userFacingMessage(for: error) }
                     loadRuns()
                     liveProgress.removeValue(forKey: runId)
                     runningRunTasks.removeValue(forKey: runId)
+                    runRunners.removeValue(forKey: runId)
                 }
             }
         }
@@ -420,9 +425,15 @@ public final class AppState {
         return message
     }
 
-    public func resumeRun(_ state: RunState) async {
-        guard let providerConfig = providers.first(where: { $0.id == state.providerId }),
-              let path = cachedDatasetPath else { return }
+    /// Trims run state and output so inference can resume from startFromIndex (discards results from that index onward).
+    public func trimRunToProblem(runId: String, startFromIndex: Int) {
+        guard let path = cachedDatasetPath else { return }
+        let runsDir = datasetService.appSupportDirectory.appending(path: "runs", directoryHint: .isDirectory)
+        let stateURL = runsDir.appending(path: "\(runId)_state.json")
+        var stateDecoder = JSONDecoder()
+        stateDecoder.dateDecodingStrategy = .iso8601
+        guard let data = try? Data(contentsOf: stateURL),
+              var state = try? stateDecoder.decode(RunState.self, from: data) else { return }
         let problems: [BenchmarkProblem]
         do {
             problems = try datasetService.loadProblems(from: path, languages: state.languages)
@@ -430,29 +441,99 @@ public final class AppState {
             errorMessage = error.localizedDescription
             return
         }
+        state.completedIndices = state.completedIndices.filter { $0 < startFromIndex }
+        state.status = .paused
+        state.updatedAt = Date()
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        if let stateData = try? encoder.encode(state) {
+            try? stateData.write(to: stateURL)
+        }
+        let outputURL = runsDir.appending(path: "\(runId)_output.jsonl")
+        var rows: [BenchmarkRow] = problems.map { BenchmarkRow(from: $0, output: nil) }
+        if FileManager.default.fileExists(atPath: outputURL.path), let existingData = try? Data(contentsOf: outputURL) {
+            let lines = existingData.split(separator: UInt8(ascii: "\n"))
+            let decoder = JSONDecoder()
+            for (idx, line) in lines.enumerated() where idx < rows.count && idx < startFromIndex {
+                if let row = try? decoder.decode(BenchmarkRow.self, from: Data(line)), let out = row.output, !out.isEmpty {
+                    rows[idx].output = out
+                }
+            }
+        }
+        for i in startFromIndex..<rows.count {
+            rows[i].output = nil
+        }
+        try? FileManager.default.createDirectory(at: runsDir, withIntermediateDirectories: true)
+        var lines: [String] = []
+        for row in rows {
+            if let rowData = try? encoder.encode(row), let s = String(data: rowData, encoding: .utf8) {
+                lines.append(s)
+            }
+        }
+        try? lines.joined(separator: "\n").write(to: outputURL, atomically: true, encoding: .utf8)
+        resultsStore?.deleteRunProblemResultsFromIndex(runId: runId, fromIndex: startFromIndex)
+        loadRuns()
+    }
+
+    /// Problem count for a run's languages (for resume sheet). Returns nil if dataset path unavailable.
+    public func problemCountForRun(_ run: RunState) -> Int? {
+        guard let path = cachedDatasetPath else { return nil }
+        return (try? datasetService.loadProblems(from: path, languages: run.languages))?.count
+    }
+
+    public func resumeRun(_ state: RunState, startFromIndex: Int? = nil) async {
+        var stateToUse = state
+        if let start = startFromIndex, (state.completedIndices.max() ?? -1) >= start {
+            trimRunToProblem(runId: state.runId, startFromIndex: start)
+            stateToUse = runs.first { $0.runId == state.runId } ?? state
+        }
+        guard let providerConfig = providers.first(where: { $0.id == stateToUse.providerId }),
+              let path = cachedDatasetPath else { return }
+        let problems: [BenchmarkProblem]
+        do {
+            problems = try datasetService.loadProblems(from: path, languages: stateToUse.languages)
+        } catch {
+            errorMessage = error.localizedDescription
+            return
+        }
         let provider: any InferenceProvider
         switch providerConfig.kind {
         case .anthropic:
-            provider = AnthropicProvider(id: providerConfig.id, name: providerConfig.name, apiKey: providerConfig.apiKey, modelId: state.modelId)
+            provider = AnthropicProvider(id: providerConfig.id, name: providerConfig.name, apiKey: providerConfig.apiKey, modelId: stateToUse.modelId)
         case .lmStudio:
             let base = providerConfig.baseURL ?? "http://127.0.0.1:1234"
-            provider = LMStudioProvider(id: providerConfig.id, name: providerConfig.name, apiKey: providerConfig.apiKey, baseURL: base, modelId: state.modelId, modelKind: state.modelKind)
+            provider = LMStudioProvider(id: providerConfig.id, name: providerConfig.name, apiKey: providerConfig.apiKey, baseURL: base, modelId: stateToUse.modelId, modelKind: stateToUse.modelKind)
         default:
             let base = providerConfig.baseURL ?? "http://localhost:1234"
-            provider = OpenAIProvider(id: providerConfig.id, name: providerConfig.name, apiKey: providerConfig.apiKey, baseURL: base, modelId: state.modelId)
+            provider = OpenAIProvider(id: providerConfig.id, name: providerConfig.name, apiKey: providerConfig.apiKey, baseURL: base, modelId: stateToUse.modelId)
         }
-        var runState = state
+        var runState = stateToUse
         runState.status = .inProgress
         let runner = InferenceRunner(provider: provider, datasetService: datasetService, runState: runState, problems: problems)
-        if let outPath = state.outputPath {
-            try? await runner.loadExistingOutput(from: URL(fileURLWithPath: outPath))
+        let runId = stateToUse.runId
+        let outputURL: URL = stateToUse.outputPath.map { URL(fileURLWithPath: $0) }
+            ?? datasetService.appSupportDirectory.appending(path: "runs", directoryHint: .isDirectory).appending(path: "\(runId)_output.jsonl")
+        if FileManager.default.fileExists(atPath: outputURL.path) {
+            try? await runner.loadExistingOutput(from: outputURL)
         }
-        let runId = state.runId
+        var stateToPersist = await runner.currentState()
+        stateToPersist.status = .inProgress
+        stateToPersist.updatedAt = Date()
+        let runsDir = datasetService.appSupportDirectory.appending(path: "runs", directoryHint: .isDirectory)
+        let stateURL = runsDir.appending(path: "\(runId)_state.json")
+        try? FileManager.default.createDirectory(at: runsDir, withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        if let data = try? encoder.encode(stateToPersist) {
+            try? data.write(to: stateURL)
+        }
         let totalProblems = problems.count
-        resultsStore?.saveRun(runState)
-        liveProgress[runId] = LiveRunProgress(inferenceCompleted: state.completedIndices.count, inferenceTotal: problems.count)
+        resultsStore?.saveRun(stateToPersist)
+        liveProgress[runId] = LiveRunProgress(inferenceCompleted: stateToPersist.completedIndices.count, inferenceTotal: problems.count)
+        bumpProblemResultsVersion(runId: runId)
         loadRuns()
 
+        runRunners[runId] = runner
         let continuation = evaluationQueueContinuation
         let onProblemComplete: (@Sendable (Int, BenchmarkRow) -> Void)? = evaluateWhenRunCompletes ? nil : { [continuation] index, row in
             _ = continuation?.yield(EvaluationQueueItem(runId: runId, problemIndex: index, row: row, totalProblems: totalProblems))
@@ -493,15 +574,17 @@ public final class AppState {
                         Task { await self.runEvaluation(runId: runId) }
                     }
                     runningRunTasks.removeValue(forKey: runId)
+                    runRunners.removeValue(forKey: runId)
                 }
             } catch {
                 progressContinuation.finish()
                 _ = await consumerTask.value
                 await MainActor.run {
-                    errorMessage = Self.userFacingMessage(for: error)
+                    if !(error is CancellationError) { errorMessage = Self.userFacingMessage(for: error) }
                     loadRuns()
                     liveProgress.removeValue(forKey: runId)
                     runningRunTasks.removeValue(forKey: runId)
+                    runRunners.removeValue(forKey: runId)
                 }
             }
         }
@@ -509,12 +592,16 @@ public final class AppState {
     }
 
     public func pauseRun(runId: String) {
+        if let r = runRunners[runId] { Task { await r.cancel() } }
+        runRunners.removeValue(forKey: runId)
         runningRunTasks[runId]?.cancel()
         runningRunTasks.removeValue(forKey: runId)
     }
 
     /// Deletes a run: cancels any active task, removes from DB and disk, then reloads runs and results.
     public func deleteRun(runId: String) {
+        if let r = runRunners[runId] { Task { await r.cancel() } }
+        runRunners.removeValue(forKey: runId)
         runningRunTasks[runId]?.cancel()
         runningRunTasks.removeValue(forKey: runId)
         resultsStore?.deleteRun(runId: runId)
@@ -539,7 +626,16 @@ public final class AppState {
         decoder.dateDecodingStrategy = .iso8601
         for url in stateFiles {
             guard let data = try? Data(contentsOf: url),
-                  let state = try? decoder.decode(RunState.self, from: data) else { continue }
+                  var state = try? decoder.decode(RunState.self, from: data) else { continue }
+            if state.status == .inProgress, runningRunTasks[state.runId] == nil {
+                state.status = .paused
+                state.updatedAt = Date()
+                let encoder = JSONEncoder()
+                encoder.dateEncodingStrategy = .iso8601
+                if let newData = try? encoder.encode(state) {
+                    try? newData.write(to: url)
+                }
+            }
             loaded.append(state)
         }
         runs = loaded.sorted { ($0.updatedAt) > ($1.updatedAt) }
