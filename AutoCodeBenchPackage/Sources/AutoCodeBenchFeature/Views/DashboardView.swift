@@ -6,7 +6,16 @@ public struct DashboardView: View {
     @Bindable var state: AppState
     @State private var providerChartByCategory = true
     @State private var selectedLanguageSortKey: String? = nil
-    
+    // Hover selection state for chart annotations
+    @State private var selectedPassAt1Model: String?
+    @State private var selectedPassAt1ModelLanguage: String?
+    @State private var selectedPassAt1Provider: String?
+    @State private var selectedPassAt1OverTime: String?
+    @State private var selectedPassAt1Language: String?
+    @State private var selectedRunTiming: String?
+    @State private var selectedTokenEfficiency: String?
+    @State private var selectedInferenceSpeed: String?
+
     public init(state: AppState) {
         self.state = state
     }
@@ -110,12 +119,43 @@ public struct DashboardView: View {
         return VStack(alignment: .leading, spacing: 12) {
             Text("Pass@1 by model")
                 .font(.headline)
-            Chart(series, id: \.model) { item in
-                BarMark(
-                    x: .value("Model", item.model),
-                    y: .value("Pass@1 %", item.avg * 100)
-                )
-                .foregroundStyle(by: .value("Model", item.model))
+            Chart {
+                ForEach(series, id: \.model) { item in
+                    BarMark(
+                        x: .value("Model", item.model),
+                        y: .value("Pass@1 %", item.avg * 100)
+                    )
+                    .foregroundStyle(by: .value("Model", item.model))
+                }
+                if let sel = selectedPassAt1Model, let item = series.first(where: { $0.model == sel }) {
+                    RectangleMark(x: .value("Model", sel))
+                        .foregroundStyle(.primary.opacity(0.2))
+                        .annotation(position: .trailing, alignment: .center, spacing: 0) {
+                            ChartAnnotationContainer {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(item.model).font(.headline)
+                                    Text(String(format: "Pass@1: %.1f%%", item.avg * 100)).font(.subheadline)
+                                }
+                            }
+                        }
+                        .accessibilityHidden(true)
+                }
+            }
+            .chartOverlay { proxy in
+                GeometryReader { geo in
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onContinuousHover { phase in
+                            switch phase {
+                            case .active(let location):
+                                let origin = geo[proxy.plotAreaFrame].origin
+                                let plotX = location.x - origin.x
+                                selectedPassAt1Model = proxy.value(atX: plotX, as: String.self)
+                            case .ended:
+                                selectedPassAt1Model = nil
+                            }
+                        }
+                }
             }
             .chartForegroundStyleScale(domain: state.modelColorScale.domain, range: state.modelColorScale.range)
             .chartXAxisLabel("Model")
@@ -125,7 +165,7 @@ public struct DashboardView: View {
         .glassCardStatic(cornerRadius: 12)
         .frame(maxWidth: .infinity, minHeight: 400)
     }
-    
+
     // MARK: - Pass@1 by Model / Language (multi-line per language, sortable by overall or by language)
     private var passAt1ByModelLanguageCard: some View {
         struct LangModelPoint: Identifiable {
@@ -180,19 +220,55 @@ public struct DashboardView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                Chart(points) { pt in
-                    LineMark(
-                        x: .value("Model", pt.model),
-                        y: .value("Pass@1 %", pt.passAt1 * 100)
-                    )
-                    .foregroundStyle(by: .value("Language", pt.language))
-                    .symbol(by: .value("Language", pt.language))
-                    PointMark(
-                        x: .value("Model", pt.model),
-                        y: .value("Pass@1 %", pt.passAt1 * 100)
-                    )
-                    .foregroundStyle(by: .value("Language", pt.language))
-                    .symbol(by: .value("Language", pt.language))
+                Chart {
+                    ForEach(points) { pt in
+                        LineMark(
+                            x: .value("Model", pt.model),
+                            y: .value("Pass@1 %", pt.passAt1 * 100)
+                        )
+                        .foregroundStyle(by: .value("Language", pt.language))
+                        .symbol(by: .value("Language", pt.language))
+                        PointMark(
+                            x: .value("Model", pt.model),
+                            y: .value("Pass@1 %", pt.passAt1 * 100)
+                        )
+                        .foregroundStyle(by: .value("Language", pt.language))
+                        .symbol(by: .value("Language", pt.language))
+                    }
+                    if let sel = selectedPassAt1ModelLanguage, let langVals = modelLang[sel] {
+                        RectangleMark(x: .value("Model", sel))
+                            .foregroundStyle(.primary.opacity(0.2))
+                            .annotation(position: (sortedModels.firstIndex(of: sel).map { $0 < sortedModels.count / 2 } ?? true) ? .trailing : .leading, alignment: .center, spacing: 0) {
+                                ChartAnnotationContainer {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(sel).font(.headline)
+                                        Divider()
+                                        ForEach(Array(langVals.keys).sorted(), id: \.self) { lang in
+                                            if let v = langVals[lang] {
+                                                Text("\(lang): \(String(format: "%.1f%%", v * 100))").font(.subheadline)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            .accessibilityHidden(true)
+                    }
+                }
+                .chartOverlay { proxy in
+                    GeometryReader { geo in
+                        Color.clear
+                            .contentShape(Rectangle())
+                            .onContinuousHover { phase in
+                                switch phase {
+                                case .active(let location):
+                                    let origin = geo[proxy.plotAreaFrame].origin
+                                    let plotX = location.x - origin.x
+                                    selectedPassAt1ModelLanguage = proxy.value(atX: plotX, as: String.self)
+                                case .ended:
+                                    selectedPassAt1ModelLanguage = nil
+                                }
+                            }
+                    }
                 }
                 .chartXAxis {
                     AxisMarks(values: sortedModels) { _ in
@@ -208,7 +284,7 @@ public struct DashboardView: View {
         .glassCard(cornerRadius: 12)
         .frame(maxWidth: .infinity, minHeight: 400)
     }
-    
+
     // MARK: - Pass@1 by Provider (category or individual)
     private var passAt1ByProviderCard: some View {
         let categoryLabel: (ProviderCategory) -> String = { cat in
@@ -248,19 +324,79 @@ public struct DashboardView: View {
             }
             Group {
                 if providerChartByCategory {
-                    Chart(categorySeries, id: \.name) { item in
-                        BarMark(
-                            x: .value("Category", item.name),
-                            y: .value("Pass@1 %", item.avg * 100)
-                        )
+                    Chart {
+                        ForEach(categorySeries, id: \.name) { item in
+                            BarMark(
+                                x: .value("Category", item.name),
+                                y: .value("Pass@1 %", item.avg * 100)
+                            )
+                        }
+                        if let sel = selectedPassAt1Provider, let item = categorySeries.first(where: { $0.name == sel }) {
+                            RectangleMark(x: .value("Category", sel))
+                                .foregroundStyle(.primary.opacity(0.2))
+                                .annotation(position: .trailing, alignment: .center, spacing: 0) {
+                                    ChartAnnotationContainer {
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(item.name).font(.headline)
+                                            Text(String(format: "Pass@1: %.1f%%", item.avg * 100)).font(.subheadline)
+                                        }
+                                    }
+                                }
+                                .accessibilityHidden(true)
+                        }
+                    }
+                    .chartOverlay { proxy in
+                        GeometryReader { geo in
+                            Color.clear.contentShape(Rectangle())
+                                .onContinuousHover { phase in
+                                    switch phase {
+                                    case .active(let location):
+                                        let origin = geo[proxy.plotAreaFrame].origin
+                                        let plotX = location.x - origin.x
+                                        selectedPassAt1Provider = proxy.value(atX: plotX, as: String.self)
+                                    case .ended:
+                                        selectedPassAt1Provider = nil
+                                    }
+                                }
+                        }
                     }
                     .chartXAxisLabel("Category")
                 } else {
-                    Chart(providerSeries, id: \.name) { item in
-                        BarMark(
-                            x: .value("Provider", item.name),
-                            y: .value("Pass@1 %", item.avg * 100)
-                        )
+                    Chart {
+                        ForEach(providerSeries, id: \.name) { item in
+                            BarMark(
+                                x: .value("Provider", item.name),
+                                y: .value("Pass@1 %", item.avg * 100)
+                            )
+                        }
+                        if let sel = selectedPassAt1Provider, let item = providerSeries.first(where: { $0.name == sel }) {
+                            RectangleMark(x: .value("Provider", sel))
+                                .foregroundStyle(.primary.opacity(0.2))
+                                .annotation(position: .trailing, alignment: .center, spacing: 0) {
+                                    ChartAnnotationContainer {
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(item.name).font(.headline)
+                                            Text(String(format: "Pass@1: %.1f%%", item.avg * 100)).font(.subheadline)
+                                        }
+                                    }
+                                }
+                                .accessibilityHidden(true)
+                        }
+                    }
+                    .chartOverlay { proxy in
+                        GeometryReader { geo in
+                            Color.clear.contentShape(Rectangle())
+                                .onContinuousHover { phase in
+                                    switch phase {
+                                    case .active(let location):
+                                        let origin = geo[proxy.plotAreaFrame].origin
+                                        let plotX = location.x - origin.x
+                                        selectedPassAt1Provider = proxy.value(atX: plotX, as: String.self)
+                                    case .ended:
+                                        selectedPassAt1Provider = nil
+                                    }
+                                }
+                        }
                     }
                     .chartXAxisLabel("Provider")
                 }
@@ -270,7 +406,7 @@ public struct DashboardView: View {
         .padding(16)
         .glassCard(cornerRadius: 12)
     }
-    
+
     // MARK: - Pass@1 over time
     private var passAt1OverTimeCard: some View {
         let points: [(date: String, passAt1: Double)] = state.resultsTable
@@ -279,44 +415,114 @@ public struct DashboardView: View {
             .mapValues { $0.map(\.passAt1) }
         let series: [(date: String, avg: Double)] = grouped.map { (date: $0.key, avg: $0.value.reduce(0, +) / Double($0.value.count)) }
             .sorted { $0.date < $1.date }
-        
+        let countByDate: [String: Int] = grouped.mapValues(\.count)
+
         return VStack(alignment: .leading, spacing: 12) {
             Text("Pass@1 over time")
                 .font(.headline)
-            Chart(series, id: \.date) { item in
-                BarMark(
-                    x: .value("Date", item.date),
-                    y: .value("Pass@1", item.avg * 100)
-                )
+            Chart {
+                ForEach(series, id: \.date) { item in
+                    BarMark(
+                        x: .value("Date", item.date),
+                        y: .value("Pass@1", item.avg * 100)
+                    )
+                }
+                if let sel = selectedPassAt1OverTime, let item = series.first(where: { $0.date == sel }) {
+                    RectangleMark(x: .value("Date", sel))
+                        .foregroundStyle(.primary.opacity(0.2))
+                        .annotation(position: .trailing, alignment: .center, spacing: 0) {
+                            ChartAnnotationContainer {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(item.date).font(.headline)
+                                    Text(String(format: "Avg Pass@1: %.1f%%", item.avg * 100)).font(.subheadline)
+                                    if let n = countByDate[sel] {
+                                        Text("\(n) result(s)").font(.caption).foregroundStyle(.secondary)
+                                    }
+                                }
+                            }
+                        }
+                        .accessibilityHidden(true)
+                }
+            }
+            .chartOverlay { proxy in
+                GeometryReader { geo in
+                    Color.clear.contentShape(Rectangle())
+                        .onContinuousHover { phase in
+                            switch phase {
+                            case .active(let location):
+                                let origin = geo[proxy.plotAreaFrame].origin
+                                let plotX = location.x - origin.x
+                                selectedPassAt1OverTime = proxy.value(atX: plotX, as: String.self)
+                            case .ended:
+                                selectedPassAt1OverTime = nil
+                            }
+                        }
+                }
             }
             .chartYAxisLabel("Pass@1 %")
         }
         .padding(16)
         .glassCardStatic(cornerRadius: 12)
     }
-    
+
     // MARK: - Pass@1 by language (existing horizontal)
     private var passAt1ByLanguageCard: some View {
         let byLang: [String: [Double]] = Dictionary(grouping: state.resultsTable, by: { $0.language })
             .mapValues { $0.map(\.passAt1) }
         let series: [(lang: String, avg: Double)] = byLang.map { (lang: $0.key, avg: $0.value.reduce(0, +) / Double($0.value.count)) }
             .sorted { $0.lang < $1.lang }
-        
+        let xMax = (series.map(\.avg).max() ?? 0) * 100
+
         return VStack(alignment: .leading, spacing: 12) {
             Text("Pass@1 by language")
                 .font(.headline)
-            Chart(series, id: \.lang) { item in
-                BarMark(
-                    x: .value("Pass@1", item.avg * 100),
-                    y: .value("Language", item.lang)
-                )
+            Chart {
+                ForEach(series, id: \.lang) { item in
+                    BarMark(
+                        x: .value("Pass@1", item.avg * 100),
+                        y: .value("Language", item.lang)
+                    )
+                }
+                if let sel = selectedPassAt1Language, let item = series.first(where: { $0.lang == sel }) {
+                    RectangleMark(
+                        xStart: .value("X", 0),
+                        xEnd: .value("X", max(xMax, 1)),
+                        y: .value("Language", sel),
+                        height: .ratio(0.6)
+                    )
+                    .foregroundStyle(.primary.opacity(0.2))
+                    .annotation(position: .trailing, alignment: .center, spacing: 0) {
+                        ChartAnnotationContainer {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(item.lang).font(.headline)
+                                Text(String(format: "Pass@1: %.1f%%", item.avg * 100)).font(.subheadline)
+                            }
+                        }
+                    }
+                    .accessibilityHidden(true)
+                }
+            }
+            .chartOverlay { proxy in
+                GeometryReader { geo in
+                    Color.clear.contentShape(Rectangle())
+                        .onContinuousHover { phase in
+                            switch phase {
+                            case .active(let location):
+                                let origin = geo[proxy.plotAreaFrame].origin
+                                let plotY = location.y - origin.y
+                                selectedPassAt1Language = proxy.value(atY: plotY, as: String.self)
+                            case .ended:
+                                selectedPassAt1Language = nil
+                            }
+                        }
+                }
             }
             .chartXAxisLabel("Pass@1 %")
         }
         .padding(16)
         .glassCardStatic(cornerRadius: 12)
     }
-    
+
     // MARK: - Run timing (time to complete, sorted lowest to highest)
     private var runTimingCard: some View {
         struct TimingPoint: Identifiable {
@@ -342,12 +548,42 @@ public struct DashboardView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                Chart(points) { item in
-                    BarMark(
-                        x: .value("Model · Language", item.label),
-                        y: .value("Time (s)", item.totalSeconds)
-                    )
-                    .foregroundStyle(by: .value("Model", item.model))
+                Chart {
+                    ForEach(points) { item in
+                        BarMark(
+                            x: .value("Model · Language", item.label),
+                            y: .value("Time (s)", item.totalSeconds)
+                        )
+                        .foregroundStyle(by: .value("Model", item.model))
+                    }
+                    if let sel = selectedRunTiming, let item = points.first(where: { $0.label == sel }) {
+                        RectangleMark(x: .value("Model · Language", sel))
+                            .foregroundStyle(.primary.opacity(0.2))
+                            .annotation(position: (points.firstIndex(where: { $0.label == sel }).map { $0 < points.count / 2 } ?? true) ? .trailing : .leading, alignment: .center, spacing: 0) {
+                                ChartAnnotationContainer {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(item.label).font(.headline)
+                                        Text(String(format: "%.2f s", item.totalSeconds)).font(.subheadline)
+                                    }
+                                }
+                            }
+                            .accessibilityHidden(true)
+                    }
+                }
+                .chartOverlay { proxy in
+                    GeometryReader { geo in
+                        Color.clear.contentShape(Rectangle())
+                            .onContinuousHover { phase in
+                                switch phase {
+                                case .active(let location):
+                                    let origin = geo[proxy.plotAreaFrame].origin
+                                    let plotX = location.x - origin.x
+                                    selectedRunTiming = proxy.value(atX: plotX, as: String.self)
+                                case .ended:
+                                    selectedRunTiming = nil
+                                }
+                            }
+                    }
                 }
                 .chartForegroundStyleScale(domain: state.modelColorScale.domain, range: state.modelColorScale.range)
                 .chartXAxisLabel("Model · Language")
@@ -357,7 +593,7 @@ public struct DashboardView: View {
         .padding(16)
         .glassCardStatic(cornerRadius: 12)
     }
-    
+
     // MARK: - Token efficiency (tokens per problem by model)
     private var tokenEfficiencyCard: some View {
         let byModel: [String: [Int]] = Dictionary(grouping: state.timingStats, by: { $0.modelDisplayName })
@@ -376,12 +612,42 @@ public struct DashboardView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                Chart(series, id: \.model) { item in
-                    BarMark(
-                        x: .value("Model", item.model),
-                        y: .value("Tokens", item.avgTokens)
-                    )
-                    .foregroundStyle(by: .value("Model", item.model))
+                Chart {
+                    ForEach(series, id: \.model) { item in
+                        BarMark(
+                            x: .value("Model", item.model),
+                            y: .value("Tokens", item.avgTokens)
+                        )
+                        .foregroundStyle(by: .value("Model", item.model))
+                    }
+                    if let sel = selectedTokenEfficiency, let item = series.first(where: { $0.model == sel }) {
+                        RectangleMark(x: .value("Model", sel))
+                            .foregroundStyle(.primary.opacity(0.2))
+                            .annotation(position: .trailing, alignment: .center, spacing: 0) {
+                                ChartAnnotationContainer {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(item.model).font(.headline)
+                                        Text(String(format: "%.0f tokens/problem", item.avgTokens)).font(.subheadline)
+                                    }
+                                }
+                            }
+                            .accessibilityHidden(true)
+                    }
+                }
+                .chartOverlay { proxy in
+                    GeometryReader { geo in
+                        Color.clear.contentShape(Rectangle())
+                            .onContinuousHover { phase in
+                                switch phase {
+                                case .active(let location):
+                                    let origin = geo[proxy.plotAreaFrame].origin
+                                    let plotX = location.x - origin.x
+                                    selectedTokenEfficiency = proxy.value(atX: plotX, as: String.self)
+                                case .ended:
+                                    selectedTokenEfficiency = nil
+                                }
+                            }
+                    }
                 }
                 .chartForegroundStyleScale(domain: state.modelColorScale.domain, range: state.modelColorScale.range)
                 .chartXAxisLabel("Model")
@@ -391,7 +657,7 @@ public struct DashboardView: View {
         .padding(16)
         .glassCardStatic(cornerRadius: 12)
     }
-    
+
     // MARK: - Inference speed (avg ms per problem by model)
     private var inferenceSpeedCard: some View {
         let byModel: [String: [Int]] = Dictionary(grouping: state.timingStats, by: { $0.modelDisplayName })
@@ -407,12 +673,42 @@ public struct DashboardView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                Chart(series, id: \.model) { item in
-                    BarMark(
-                        x: .value("Model", item.model),
-                        y: .value("ms", item.avgMs)
-                    )
-                    .foregroundStyle(by: .value("Model", item.model))
+                Chart {
+                    ForEach(series, id: \.model) { item in
+                        BarMark(
+                            x: .value("Model", item.model),
+                            y: .value("ms", item.avgMs)
+                        )
+                        .foregroundStyle(by: .value("Model", item.model))
+                    }
+                    if let sel = selectedInferenceSpeed, let item = series.first(where: { $0.model == sel }) {
+                        RectangleMark(x: .value("Model", sel))
+                            .foregroundStyle(.primary.opacity(0.2))
+                            .annotation(position: .trailing, alignment: .center, spacing: 0) {
+                                ChartAnnotationContainer {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(item.model).font(.headline)
+                                        Text(String(format: "%.0f ms/problem", item.avgMs)).font(.subheadline)
+                                    }
+                                }
+                            }
+                            .accessibilityHidden(true)
+                    }
+                }
+                .chartOverlay { proxy in
+                    GeometryReader { geo in
+                        Color.clear.contentShape(Rectangle())
+                            .onContinuousHover { phase in
+                                switch phase {
+                                case .active(let location):
+                                    let origin = geo[proxy.plotAreaFrame].origin
+                                    let plotX = location.x - origin.x
+                                    selectedInferenceSpeed = proxy.value(atX: plotX, as: String.self)
+                                case .ended:
+                                    selectedInferenceSpeed = nil
+                                }
+                            }
+                    }
                 }
                 .chartForegroundStyleScale(domain: state.modelColorScale.domain, range: state.modelColorScale.range)
                 .chartXAxisLabel("Model")

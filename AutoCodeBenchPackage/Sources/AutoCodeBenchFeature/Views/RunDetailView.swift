@@ -7,7 +7,11 @@ public struct RunDetailView: View {
     @Bindable var state: AppState
     var onDeleted: (() -> Void)?
     @State private var resumeSheetItem: ResumeFromProblemSheetItem?
-    @State private var showRerunLanguageSheet = false
+    @State private var rerunLanguageSheetRun: RunState?
+    @State private var selectedProgressPhase: String?
+    @State private var selectedPassRateLanguage: String?
+    @State private var selectedInferenceTimeLanguage: String?
+    @State private var selectedEvalTimeLanguage: String?
 
     public init(runId: String, state: AppState, onDeleted: (() -> Void)? = nil) {
         self.runId = runId
@@ -69,17 +73,18 @@ public struct RunDetailView: View {
                 Task { await state.resumeRun(item.run, startFromIndex: idx) }
             }, onDismiss: { resumeSheetItem = nil })
         }
-        .sheet(isPresented: $showRerunLanguageSheet) {
-            if let run {
-                RerunLanguageSheet(
-                    languages: run.languages,
-                    onSelect: { lang in
-                        showRerunLanguageSheet = false
-                        Task { await state.runEvaluation(runId: runId, language: lang) }
-                    },
-                    onDismiss: { showRerunLanguageSheet = false }
-                )
-            }
+        .sheet(item: $rerunLanguageSheetRun) { run in
+            let languages = run.languages.isEmpty
+                ? Array(Set(state.fetchRunProblemResults(runId: run.runId).map(\.language))).sorted()
+                : run.languages
+            RerunLanguageSheet(
+                languages: languages,
+                onSelect: { lang in
+                    rerunLanguageSheetRun = nil
+                    Task { await state.runEvaluation(runId: run.runId, language: lang) }
+                },
+                onDismiss: { rerunLanguageSheetRun = nil }
+            )
         }
     }
 
@@ -192,7 +197,7 @@ public struct RunDetailView: View {
             }
             if run.status == .inferenceComplete || run.status == .done {
                 Button("Re-run evaluation for language…") {
-                    showRerunLanguageSheet = true
+                    rerunLanguageSheetRun = run
                 }
                 .disabled(state.isRunningEvaluation)
                 .buttonStyle(.glass)
@@ -215,10 +220,10 @@ public struct RunDetailView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Progress & results")
                 .font(.headline)
-            runProgressChart(rows: rows, run: run)
-            passRateByLanguageChart(rows: rows)
-            avgInferenceTimeByLanguageChart(rows: rows)
-            avgEvalTimeByLanguageChart(rows: rows)
+            runProgressChart(rows: rows, run: run, selectedPhase: $selectedProgressPhase)
+            passRateByLanguageChart(rows: rows, selectedLanguage: $selectedPassRateLanguage)
+            avgInferenceTimeByLanguageChart(rows: rows, selectedLanguage: $selectedInferenceTimeLanguage)
+            avgEvalTimeByLanguageChart(rows: rows, selectedLanguage: $selectedEvalTimeLanguage)
             runSummaryStats(rows: rows)
         }
     }
@@ -293,7 +298,7 @@ public struct RunDetailView: View {
 
     // MARK: - Progress & results charts
 
-    private func runProgressChart(rows: [ResultsStore.RunProblemResultRow], run: RunState) -> some View {
+    private func runProgressChart(rows: [ResultsStore.RunProblemResultRow], run: RunState, selectedPhase: Binding<String?>) -> some View {
         let progress = state.liveProgress[runId]
         let inferenceTotal = progress?.inferenceTotal ?? state.problemCountForRun(run) ?? run.completedIndices.count
         let inferenceCompleted = progress?.inferenceCompleted ?? rows.count
@@ -316,11 +321,41 @@ public struct RunDetailView: View {
         return VStack(alignment: .leading, spacing: 12) {
             Text("Run progress")
                 .font(.headline)
-            Chart(points) { item in
-                BarMark(
-                    x: .value("Phase", item.phase),
-                    y: .value("%", item.percent)
-                )
+            Chart {
+                ForEach(points) { item in
+                    BarMark(
+                        x: .value("Phase", item.phase),
+                        y: .value("%", item.percent)
+                    )
+                }
+                if let sel = selectedPhase.wrappedValue, let item = points.first(where: { $0.phase == sel }) {
+                    RectangleMark(x: .value("Phase", sel))
+                        .foregroundStyle(.primary.opacity(0.2))
+                        .annotation(position: .trailing, alignment: .center, spacing: 0) {
+                            ChartAnnotationContainer {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(item.phase).font(.headline)
+                                    Text(String(format: "%.1f%%", item.percent)).font(.subheadline)
+                                }
+                            }
+                        }
+                        .accessibilityHidden(true)
+                }
+            }
+            .chartOverlay { proxy in
+                GeometryReader { geo in
+                    Color.clear.contentShape(Rectangle())
+                        .onContinuousHover { phase in
+                            switch phase {
+                            case .active(let location):
+                                let origin = geo[proxy.plotAreaFrame].origin
+                                let plotX = location.x - origin.x
+                                selectedPhase.wrappedValue = proxy.value(atX: plotX, as: String.self)
+                            case .ended:
+                                selectedPhase.wrappedValue = nil
+                            }
+                        }
+                }
             }
             .chartYScale(domain: 0 ... 100)
             .chartYAxisLabel("%")
@@ -330,7 +365,7 @@ public struct RunDetailView: View {
         .glassCardStatic(cornerRadius: 12)
     }
 
-    private func passRateByLanguageChart(rows: [ResultsStore.RunProblemResultRow]) -> some View {
+    private func passRateByLanguageChart(rows: [ResultsStore.RunProblemResultRow], selectedLanguage: Binding<String?>) -> some View {
         let byLang: [String: (passed: Int, total: Int)] = Dictionary(grouping: rows.filter { $0.evalPassed != nil }, by: \.language)
             .mapValues { langRows in
                 let passed = langRows.filter(\.evalPassed!).count
@@ -347,11 +382,42 @@ public struct RunDetailView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                Chart(series, id: \.language) { item in
-                    BarMark(
-                        x: .value("Language", item.language),
-                        y: .value("Pass rate %", item.passRate)
-                    )
+                Chart {
+                    ForEach(series, id: \.language) { item in
+                        BarMark(
+                            x: .value("Language", item.language),
+                            y: .value("Pass rate %", item.passRate)
+                        )
+                    }
+                    if let sel = selectedLanguage.wrappedValue, let item = series.first(where: { $0.language == sel }), let counts = byLang[sel] {
+                        RectangleMark(x: .value("Language", sel))
+                            .foregroundStyle(.primary.opacity(0.2))
+                            .annotation(position: .trailing, alignment: .center, spacing: 0) {
+                                ChartAnnotationContainer {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(item.language).font(.headline)
+                                        Text(String(format: "Pass rate: %.1f%%", item.passRate)).font(.subheadline)
+                                        Text("\(counts.passed)/\(counts.total) passed").font(.caption).foregroundStyle(.secondary)
+                                    }
+                                }
+                            }
+                            .accessibilityHidden(true)
+                    }
+                }
+                .chartOverlay { proxy in
+                    GeometryReader { geo in
+                        Color.clear.contentShape(Rectangle())
+                            .onContinuousHover { phase in
+                                switch phase {
+                                case .active(let location):
+                                    let origin = geo[proxy.plotAreaFrame].origin
+                                    let plotX = location.x - origin.x
+                                    selectedLanguage.wrappedValue = proxy.value(atX: plotX, as: String.self)
+                                case .ended:
+                                    selectedLanguage.wrappedValue = nil
+                                }
+                            }
+                    }
                 }
                 .chartYScale(domain: 0 ... 100)
                 .chartYAxisLabel("Pass rate %")
@@ -362,7 +428,7 @@ public struct RunDetailView: View {
         .glassCardStatic(cornerRadius: 12)
     }
 
-    private func avgInferenceTimeByLanguageChart(rows: [ResultsStore.RunProblemResultRow]) -> some View {
+    private func avgInferenceTimeByLanguageChart(rows: [ResultsStore.RunProblemResultRow], selectedLanguage: Binding<String?>) -> some View {
         let byLang: [String: [Int]] = Dictionary(grouping: rows, by: \.language)
             .mapValues { $0.map(\.inferenceDurationMs) }
         let series: [(language: String, avgSeconds: Double)] = byLang
@@ -376,11 +442,41 @@ public struct RunDetailView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                Chart(series, id: \.language) { item in
-                    BarMark(
-                        x: .value("Language", item.language),
-                        y: .value("Seconds", item.avgSeconds)
-                    )
+                Chart {
+                    ForEach(series, id: \.language) { item in
+                        BarMark(
+                            x: .value("Language", item.language),
+                            y: .value("Seconds", item.avgSeconds)
+                        )
+                    }
+                    if let sel = selectedLanguage.wrappedValue, let item = series.first(where: { $0.language == sel }) {
+                        RectangleMark(x: .value("Language", sel))
+                            .foregroundStyle(.primary.opacity(0.2))
+                            .annotation(position: .trailing, alignment: .center, spacing: 0) {
+                                ChartAnnotationContainer {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(item.language).font(.headline)
+                                        Text(String(format: "%.2f s", item.avgSeconds)).font(.subheadline)
+                                    }
+                                }
+                            }
+                            .accessibilityHidden(true)
+                    }
+                }
+                .chartOverlay { proxy in
+                    GeometryReader { geo in
+                        Color.clear.contentShape(Rectangle())
+                            .onContinuousHover { phase in
+                                switch phase {
+                                case .active(let location):
+                                    let origin = geo[proxy.plotAreaFrame].origin
+                                    let plotX = location.x - origin.x
+                                    selectedLanguage.wrappedValue = proxy.value(atX: plotX, as: String.self)
+                                case .ended:
+                                    selectedLanguage.wrappedValue = nil
+                                }
+                            }
+                    }
                 }
                 .chartYAxisLabel("Seconds")
                 .frame(height: 280)
@@ -390,7 +486,7 @@ public struct RunDetailView: View {
         .glassCardStatic(cornerRadius: 12)
     }
 
-    private func avgEvalTimeByLanguageChart(rows: [ResultsStore.RunProblemResultRow]) -> some View {
+    private func avgEvalTimeByLanguageChart(rows: [ResultsStore.RunProblemResultRow], selectedLanguage: Binding<String?>) -> some View {
         let byLang: [String: [Int]] = Dictionary(grouping: rows.filter { $0.evalDurationMs != nil }, by: \.language)
             .mapValues { $0.compactMap(\.evalDurationMs) }
         let series: [(language: String, avgSeconds: Double)] = byLang
@@ -407,11 +503,41 @@ public struct RunDetailView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                Chart(series, id: \.language) { item in
-                    BarMark(
-                        x: .value("Language", item.language),
-                        y: .value("Seconds", item.avgSeconds)
-                    )
+                Chart {
+                    ForEach(series, id: \.language) { item in
+                        BarMark(
+                            x: .value("Language", item.language),
+                            y: .value("Seconds", item.avgSeconds)
+                        )
+                    }
+                    if let sel = selectedLanguage.wrappedValue, let item = series.first(where: { $0.language == sel }) {
+                        RectangleMark(x: .value("Language", sel))
+                            .foregroundStyle(.primary.opacity(0.2))
+                            .annotation(position: .trailing, alignment: .center, spacing: 0) {
+                                ChartAnnotationContainer {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(item.language).font(.headline)
+                                        Text(String(format: "%.2f s", item.avgSeconds)).font(.subheadline)
+                                    }
+                                }
+                            }
+                            .accessibilityHidden(true)
+                    }
+                }
+                .chartOverlay { proxy in
+                    GeometryReader { geo in
+                        Color.clear.contentShape(Rectangle())
+                            .onContinuousHover { phase in
+                                switch phase {
+                                case .active(let location):
+                                    let origin = geo[proxy.plotAreaFrame].origin
+                                    let plotX = location.x - origin.x
+                                    selectedLanguage.wrappedValue = proxy.value(atX: plotX, as: String.self)
+                                case .ended:
+                                    selectedLanguage.wrappedValue = nil
+                                }
+                            }
+                    }
                 }
                 .chartYAxisLabel("Seconds")
                 .frame(height: 280)
@@ -467,11 +593,22 @@ private struct RerunLanguageSheet: View {
 
     var body: some View {
         NavigationStack {
-            List(languages, id: \.self) { lang in
-                Button(lang) {
-                    onSelect(lang)
+            Group {
+                if languages.isEmpty {
+                    ContentUnavailableView(
+                        "No languages",
+                        systemImage: "globe",
+                        description: Text("No languages are available for this run.")
+                    )
+                } else {
+                    List(languages, id: \.self) { lang in
+                        Button(lang) {
+                            onSelect(lang)
+                        }
+                    }
                 }
             }
+            .frame(minWidth: 280, minHeight: 200)
             .navigationTitle("Re-run evaluation for language")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
