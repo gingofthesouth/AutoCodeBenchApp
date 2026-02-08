@@ -548,9 +548,24 @@ public final class AppState {
         liveProgress[runId] = LiveRunProgress(inferenceCompleted: stateToPersist.completedIndices.count, inferenceTotal: problems.count)
         bumpProblemResultsVersion(runId: runId)
 
+        // Backfill: enqueue unevaluated rows that already have output
+        let currentRows = await runner.currentRows()
+        let existingProblemResults = resultsStore?.fetchRunProblemResults(runId: runId) ?? []
+        let alreadyEvaluatedIndices = Set(existingProblemResults.filter { $0.evalPassed != nil }.map { $0.problemIndex })
+        let alreadyPassed = existingProblemResults.filter { $0.evalPassed == true }.count
+        evaluationQueueAccumulator[runId] = (passed: alreadyPassed, evaluated: alreadyEvaluatedIndices.count)
+
+        if let continuation = evaluationQueueContinuation {
+            for (index, row) in currentRows.enumerated() {
+                if let output = row.output, !output.isEmpty, !alreadyEvaluatedIndices.contains(index) {
+                    _ = continuation.yield(EvaluationQueueItem(runId: runId, problemIndex: index, row: row, totalProblems: totalProblems))
+                }
+            }
+        }
+
         runRunners[runId] = runner
         let continuation = evaluationQueueContinuation
-        let onProblemComplete: (@Sendable (Int, BenchmarkRow) -> Void)? = evaluateWhenRunCompletes ? nil : { [continuation] index, row in
+        let onProblemComplete: (@Sendable (Int, BenchmarkRow) -> Void)? = { [continuation] index, row in
             _ = continuation?.yield(EvaluationQueueItem(runId: runId, problemIndex: index, row: row, totalProblems: totalProblems))
         } as (@Sendable (Int, BenchmarkRow) -> Void)
         let storeResume = resultsStore
@@ -579,15 +594,9 @@ public final class AppState {
                 await MainActor.run {
                     self.resultsStore?.saveInferenceProblemResults(runId: runId, records: inferenceRecords)
                 }
-                if evaluateWhenRunCompletes {
-                    resultsStore?.saveRun(updated)
-                }
+                resultsStore?.saveRun(updated)
                 await MainActor.run {
                     loadRuns()
-                    if evaluateWhenRunCompletes {
-                        liveProgress.removeValue(forKey: runId)
-                        Task { await self.runEvaluation(runId: runId) }
-                    }
                     runningRunTasks.removeValue(forKey: runId)
                     runRunners.removeValue(forKey: runId)
                 }
