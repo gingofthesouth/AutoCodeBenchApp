@@ -7,6 +7,8 @@ public struct OpenAIProvider: InferenceProvider, Sendable {
     private let apiKey: String
     private let baseURL: String
     private let modelId: String
+    private let providerKind: ProviderKind?
+    private let preferredCapability: OpenAIModelCapability?
 
     /// Session for cloud endpoints (5 min request, 10 min resource).
     private static let cloudSession: URLSession = {
@@ -32,12 +34,14 @@ public struct OpenAIProvider: InferenceProvider, Sendable {
         return cloudSession
     }
 
-    public init(id: String, name: String, apiKey: String, baseURL: String, modelId: String) {
+    public init(id: String, name: String, apiKey: String, baseURL: String, modelId: String, providerKind: ProviderKind? = nil, preferredCapability: OpenAIModelCapability? = nil) {
         self.id = id
         self.name = name
         self.apiKey = apiKey
         self.baseURL = Self.normalizedBaseURL(baseURL)
         self.modelId = modelId
+        self.providerKind = providerKind
+        self.preferredCapability = preferredCapability
     }
 
     /// Ensures base URL has a scheme so URL(string:) succeeds (e.g. "127.0.0.1:9191" → "http://127.0.0.1:9191").
@@ -52,7 +56,7 @@ public struct OpenAIProvider: InferenceProvider, Sendable {
     }
 
     public func complete(systemPrompt: String, userPrompt: String, temperature: Double? = nil, maxTokens: Int? = nil) async throws -> InferenceResult {
-        let capability = ModelListingService.openAIModelCapability(id: modelId)
+        let capability = preferredCapability ?? ModelListingService.openAIModelCapability(id: modelId, providerKind: providerKind)
         switch capability {
         case .legacyCompletions:
             throw ProviderError.apiError(

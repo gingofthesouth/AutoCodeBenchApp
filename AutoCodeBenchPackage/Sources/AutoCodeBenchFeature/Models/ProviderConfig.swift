@@ -84,12 +84,15 @@ public struct ProviderModel: Sendable, Identifiable {
     public let providerId: String
     public let modelKind: String?
     public let quantization: String?
+    /// When set (e.g. from OpenRouter API metadata), used to pick chat vs responses endpoint instead of ID heuristics.
+    public let openAICapability: OpenAIModelCapability?
 
-    public init(id: String, displayName: String, providerId: String, modelKind: String? = nil, quantization: String? = nil) {
+    public init(id: String, displayName: String, providerId: String, modelKind: String? = nil, quantization: String? = nil, openAICapability: OpenAIModelCapability? = nil) {
         self.id = id
         self.displayName = displayName
         self.providerId = providerId
         self.modelKind = modelKind
         self.quantization = quantization
+        self.openAICapability = openAICapability
     }
 }

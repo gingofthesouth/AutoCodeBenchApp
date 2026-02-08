@@ -327,8 +327,14 @@ public final class AppState {
             let base = providerConfig.baseURL ?? "http://127.0.0.1:1234"
             provider = LMStudioProvider(id: providerConfig.id, name: providerConfig.name, apiKey: providerConfig.apiKey, baseURL: base, modelId: modelId, modelKind: modelKind)
         case .openai, .openRouter, .ollama, .custom:
-            let base = providerConfig.baseURL ?? (providerConfig.kind == .openai ? "https://api.openai.com" : "http://localhost:1234")
-            provider = OpenAIProvider(id: providerConfig.id, name: providerConfig.name, apiKey: providerConfig.apiKey, baseURL: base, modelId: modelId)
+            let base: String
+            switch providerConfig.kind {
+            case .openai: base = providerConfig.baseURL ?? "https://api.openai.com"
+            case .openRouter: base = providerConfig.baseURL ?? "https://openrouter.ai"
+            default: base = providerConfig.baseURL ?? "http://localhost:1234"
+            }
+            let preferredCapability = (providerConfig.kind == .openRouter ? selectedModel?.openAICapability : nil)
+            provider = OpenAIProvider(id: providerConfig.id, name: providerConfig.name, apiKey: providerConfig.apiKey, baseURL: base, modelId: modelId, providerKind: providerConfig.kind == .openRouter ? .openRouter : nil, preferredCapability: preferredCapability)
         }
         let runner = InferenceRunner(provider: provider, datasetService: datasetService, runState: state, problems: problems)
         runRunners[runId] = runner
@@ -504,8 +510,14 @@ public final class AppState {
             let base = providerConfig.baseURL ?? "http://127.0.0.1:1234"
             provider = LMStudioProvider(id: providerConfig.id, name: providerConfig.name, apiKey: providerConfig.apiKey, baseURL: base, modelId: stateToUse.modelId, modelKind: stateToUse.modelKind)
         default:
-            let base = providerConfig.baseURL ?? "http://localhost:1234"
-            provider = OpenAIProvider(id: providerConfig.id, name: providerConfig.name, apiKey: providerConfig.apiKey, baseURL: base, modelId: stateToUse.modelId)
+            let base: String
+            switch providerConfig.kind {
+            case .openai: base = providerConfig.baseURL ?? "https://api.openai.com"
+            case .openRouter: base = providerConfig.baseURL ?? "https://openrouter.ai"
+            default: base = providerConfig.baseURL ?? "http://localhost:1234"
+            }
+            let providerKind: ProviderKind? = providerConfig.kind == .openRouter ? .openRouter : nil
+            provider = OpenAIProvider(id: providerConfig.id, name: providerConfig.name, apiKey: providerConfig.apiKey, baseURL: base, modelId: stateToUse.modelId, providerKind: providerKind, preferredCapability: nil)
         }
         var runState = stateToUse
         runState.status = .inProgress

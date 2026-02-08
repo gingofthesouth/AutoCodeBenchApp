@@ -16,7 +16,8 @@ public struct ModelListingService: Sendable {
     public init() {}
 
     /// Classifies an OpenAI model ID so callers can choose the correct endpoint or exclude legacy models.
-    public static func openAIModelCapability(id: String) -> OpenAIModelCapability {
+    /// - Parameter providerKind: When `.openRouter`, unknown IDs are treated as chat (OpenRouter exposes chat for most models).
+    public static func openAIModelCapability(id: String, providerKind: ProviderKind? = nil) -> OpenAIModelCapability {
         let id = id.lowercased()
         // Legacy completion-only: exclude from list and fail fast if selected.
         if id.hasPrefix("text-davinci") || id == "davinci" || id == "babbage" || id == "ada" || id == "curie" {
@@ -34,12 +35,14 @@ public struct ModelListingService: Sendable {
         if id.hasPrefix("o1") || id.hasPrefix("o3") { return .chat }
         if id.hasPrefix("gpt-3.5-turbo") { return .chat }
         if id.hasPrefix("gpt-5") { return .chat }
+        // OpenRouter: unknown IDs use chat endpoint (OpenRouter normalizes to chat/completions).
+        if providerKind == .openRouter { return .chat }
         return .legacyCompletions
     }
 
     /// True if the model is supported (chat or responses-only); used for listing.
-    public static func isOpenAISupportedModel(id: String) -> Bool {
-        switch openAIModelCapability(id: id) {
+    public static func isOpenAISupportedModel(id: String, providerKind: ProviderKind? = nil) -> Bool {
+        switch openAIModelCapability(id: id, providerKind: providerKind) {
         case .chat, .responsesOnly: return true
         case .legacyCompletions: return false
         }
@@ -99,7 +102,7 @@ public struct ModelListingService: Sendable {
         }
         let decoded = try JSONDecoder().decode(OpenAIModelsResponse.self, from: data)
         return decoded.data
-            .filter { Self.isOpenAISupportedModel(id: $0.id) }
+            .filter { Self.isOpenAISupportedModel(id: $0.id, providerKind: .openai) }
             .map { ProviderModel(id: $0.id, displayName: $0.id, providerId: providerId) }
     }
 
@@ -112,10 +115,26 @@ public struct ModelListingService: Sendable {
             throw ProviderError.apiError(statusCode: (response as? HTTPURLResponse)?.statusCode ?? -1, message: String(data: data, encoding: .utf8) ?? "Failed to list models")
         }
         let decoded = try JSONDecoder().decode(OpenRouterModelsResponse.self, from: data)
-        return decoded.data.map { model in
-            let kind: String? = model.id.contains(":thinking") ? "thinking" : nil
-            return ProviderModel(id: model.id, displayName: model.name ?? model.id, providerId: providerId, modelKind: kind, quantization: nil)
+        return decoded.data
+            .map { model in
+                let capability = Self.openRouterCapability(for: model)
+                let kind: String? = model.id.contains(":thinking") ? "thinking" : nil
+                return ProviderModel(id: model.id, displayName: model.name ?? model.id, providerId: providerId, modelKind: kind, quantization: nil, openAICapability: capability)
+            }
+            .filter { model in
+                switch model.openAICapability ?? .chat {
+                case .chat, .responsesOnly: return true
+                case .legacyCompletions: return false
+                }
+            }
+    }
+
+    /// OpenRouter: chat if architecture has instruct_type (e.g. chatml); otherwise default to chat so we don't hide models.
+    private static func openRouterCapability(for model: OpenRouterModel) -> OpenAIModelCapability {
+        if let it = model.architecture?.instructType, !it.trimmingCharacters(in: .whitespaces).isEmpty {
+            return .chat
         }
+        return .chat
     }
 
     private func listOpenAICompatibleModels(providerId: String, apiKey: String, baseURL: String) async throws -> [ProviderModel] {
@@ -320,9 +339,19 @@ private struct OpenAIModelsResponse: Decodable {
 
 private struct OpenRouterModelsResponse: Decodable {
     let data: [OpenRouterModel]
-    struct OpenRouterModel: Decodable {
-        let id: String
-        let name: String?
+}
+
+private struct OpenRouterModel: Decodable {
+    let id: String
+    let name: String?
+    let architecture: OpenRouterArchitecture?
+}
+
+private struct OpenRouterArchitecture: Decodable {
+    /// e.g. "chatml" for chat-style models; absent or other for completion-only.
+    let instructType: String?
+    enum CodingKeys: String, CodingKey {
+        case instructType = "instruct_type"
     }
 }
 
