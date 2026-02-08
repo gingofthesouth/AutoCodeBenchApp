@@ -657,12 +657,13 @@ public final class AppState {
         runs = loaded.sorted { ($0.updatedAt) > ($1.updatedAt) }
     }
 
-    public func runEvaluation(runId: String) async {
+    public func runEvaluation(runId: String, language: String? = nil) async {
         guard let state = runs.first(where: { $0.runId == runId }),
-              state.status == .inferenceComplete,
-              let outputPath = state.outputPath else { return }
+              let outputPath = state.outputPath,
+              FileManager.default.fileExists(atPath: outputPath) else { return }
+        if language == nil, state.status != .inferenceComplete { return }
+        if let lang = language, state.status != .inferenceComplete, state.status != .done { return }
         let outputURL = URL(fileURLWithPath: outputPath)
-        guard FileManager.default.fileExists(atPath: outputPath) else { return }
         let rows: [BenchmarkRow]
         do {
             let data = try Data(contentsOf: outputURL)
@@ -672,6 +673,15 @@ public final class AppState {
             errorMessage = error.localizedDescription
             return
         }
+        let indexedRowsForLanguage: [(Int, BenchmarkRow)]
+        if let lang = language {
+            let langLower = lang.lowercased()
+            indexedRowsForLanguage = rows.enumerated().filter { $0.element.language.lowercased() == langLower }.map { ($0.offset, $0.element) }
+            if indexedRowsForLanguage.isEmpty { return }
+            resultsStore?.deleteResult(runId: runId, language: lang)
+        } else {
+            indexedRowsForLanguage = rows.enumerated().map { ($0.offset, $0.element) }
+        }
         var stateCopy = state
         stateCopy.status = .evaluating
         stateCopy.updatedAt = Date()
@@ -680,6 +690,7 @@ public final class AppState {
         isRunningEvaluation = true
         currentEvaluatingRunId = runId
         errorMessage = nil
+        let totalToEval = indexedRowsForLanguage.count
         let (evalStream, evalContinuation) = AsyncStream.makeStream(of: (Int, Int, Int).self)
         let evalConsumerTask = Task { @MainActor in
             for await (c, t, p) in evalStream {
@@ -693,16 +704,35 @@ public final class AppState {
         }
         do {
             let store = resultsStore
-            let (passed, total) = try await evaluationService.evaluateAll(rows: rows) { c, t, p in evalContinuation.yield((c, t, p)) } onRowResult: { [store, runId] index, passed, duration, language in
-                store?.saveEvalProblemResult(runId: runId, problemIndex: index, language: language, passed: passed, durationMs: Int(duration * 1000))
-                Task { @MainActor in
-                    self.bumpProblemResultsVersion(runId: runId)
+            let passed: Int
+            if language != nil {
+                var passedCount = 0
+                for (completed, (originalIndex, row)) in indexedRowsForLanguage.enumerated() {
+                    let (ok, duration) = (try? await evaluationService.evaluateRow(row)) ?? (false, 0.0)
+                    if ok { passedCount += 1 }
+                    evalContinuation.yield((completed + 1, totalToEval, passedCount))
+                    store?.saveEvalProblemResult(runId: runId, problemIndex: originalIndex, language: row.language, passed: ok, durationMs: Int(duration * 1000))
+                    Task { @MainActor in
+                        self.bumpProblemResultsVersion(runId: runId)
+                    }
                 }
+                passed = passedCount
+                evalContinuation.finish()
+                _ = await evalConsumerTask.value
+                resultsStore?.saveResult(runId: runId, language: language!, total: totalToEval, passed: passed)
+            } else {
+                let (p, _) = try await evaluationService.evaluateAll(rows: rows) { c, t, p in evalContinuation.yield((c, t, p)) } onRowResult: { [store, runId] index, passed, duration, lang in
+                    store?.saveEvalProblemResult(runId: runId, problemIndex: index, language: lang, passed: passed, durationMs: Int(duration * 1000))
+                    Task { @MainActor in
+                        self.bumpProblemResultsVersion(runId: runId)
+                    }
+                }
+                passed = p
+                evalContinuation.finish()
+                _ = await evalConsumerTask.value
+                let lang = state.languages.first ?? "all"
+                resultsStore?.saveResult(runId: runId, language: lang, total: rows.count, passed: passed)
             }
-            evalContinuation.finish()
-            _ = await evalConsumerTask.value
-            let lang = state.languages.first ?? "all"
-            resultsStore?.saveResult(runId: runId, language: lang, total: total, passed: passed)
             var updated = state
             updated.status = .done
             updated.updatedAt = Date()

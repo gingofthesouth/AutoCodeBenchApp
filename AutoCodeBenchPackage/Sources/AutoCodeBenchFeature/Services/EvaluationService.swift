@@ -18,19 +18,24 @@ public struct EvaluationService: Sendable {
             text = String(text[range.upperBound...])
         }
         let pattern = #"```\S*\s*(.*?)```"#
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: .dotMatchesLineSeparators),
-              let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) else {
-            var cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            if cleaned.hasPrefix("```") { cleaned = String(cleaned.dropFirst(3)) }
-            if cleaned.hasSuffix("```") { cleaned = String(cleaned.dropLast(3)) }
-            let lines = cleaned.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: "\n", omittingEmptySubsequences: false)
-            if lines.count > 1 {
-                return lines.dropFirst().joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-            }
-            return cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: .dotMatchesLineSeparators) else {
+            return fallbackExtract(from: text)
         }
-        let codeRange = Range(match.range(at: 1), in: text)!
-        var extracted = String(text[codeRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let range = NSRange(text.startIndex..., in: text)
+        var extracted: String?
+        regex.enumerateMatches(in: text, options: [], range: range) { match, _, stop in
+            guard let match, match.numberOfRanges > 1 else { return }
+            let groupRange = match.range(at: 1)
+            guard groupRange.location != NSNotFound, let swiftRange = Range(groupRange, in: text) else { return }
+            let code = String(text[swiftRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !code.isEmpty {
+                extracted = code
+                stop.pointee = true
+            }
+        }
+        guard var extracted = extracted else {
+            return fallbackExtract(from: text)
+        }
         if language.lowercased() == "elixir", let solution = canonicalSolution?.trimmingCharacters(in: .whitespacesAndNewlines), !solution.isEmpty {
             let codeLines = extracted.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
             let solutionLines = solution.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
@@ -47,6 +52,18 @@ public struct EvaluationService: Sendable {
             }
         }
         return extracted
+    }
+
+    /// Fallback when no non-empty fenced code block found: strip backticks, optionally drop first line.
+    private static func fallbackExtract(from text: String) -> String {
+        var cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleaned.hasPrefix("```") { cleaned = String(cleaned.dropFirst(3)) }
+        if cleaned.hasSuffix("```") { cleaned = String(cleaned.dropLast(3)) }
+        let lines = cleaned.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: "\n", omittingEmptySubsequences: false)
+        if lines.count > 1 {
+            return lines.dropFirst().joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Submit one solution + test to the sandbox.

@@ -7,6 +7,7 @@ public struct RunDetailView: View {
     @Bindable var state: AppState
     var onDeleted: (() -> Void)?
     @State private var resumeSheetItem: ResumeFromProblemSheetItem?
+    @State private var showRerunLanguageSheet = false
 
     public init(runId: String, state: AppState, onDeleted: (() -> Void)? = nil) {
         self.runId = runId
@@ -67,6 +68,18 @@ public struct RunDetailView: View {
             ResumeFromProblemSheet(run: item.run, totalProblems: item.totalProblems, onResume: { idx in
                 Task { await state.resumeRun(item.run, startFromIndex: idx) }
             }, onDismiss: { resumeSheetItem = nil })
+        }
+        .sheet(isPresented: $showRerunLanguageSheet) {
+            if let run {
+                RerunLanguageSheet(
+                    languages: run.languages,
+                    onSelect: { lang in
+                        showRerunLanguageSheet = false
+                        Task { await state.runEvaluation(runId: runId, language: lang) }
+                    },
+                    onDismiss: { showRerunLanguageSheet = false }
+                )
+            }
         }
     }
 
@@ -173,6 +186,13 @@ public struct RunDetailView: View {
             if run.status == .inferenceComplete {
                 Button("Run evaluation") {
                     Task { await state.runEvaluation(runId: runId) }
+                }
+                .disabled(state.isRunningEvaluation)
+                .buttonStyle(.glass)
+            }
+            if run.status == .inferenceComplete || run.status == .done {
+                Button("Re-run evaluation for language…") {
+                    showRerunLanguageSheet = true
                 }
                 .disabled(state.isRunningEvaluation)
                 .buttonStyle(.glass)
@@ -436,6 +456,30 @@ public struct RunDetailView: View {
         case .done: return "Done"
         case .failed: return "Failed"
         case .paused: return "Paused"
+        }
+    }
+}
+
+private struct RerunLanguageSheet: View {
+    let languages: [String]
+    let onSelect: (String) -> Void
+    let onDismiss: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            List(languages, id: \.self) { lang in
+                Button(lang) {
+                    onSelect(lang)
+                }
+            }
+            .navigationTitle("Re-run evaluation for language")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        onDismiss()
+                    }
+                }
+            }
         }
     }
 }
