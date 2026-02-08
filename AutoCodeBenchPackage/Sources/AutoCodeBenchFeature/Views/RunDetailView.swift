@@ -1,3 +1,4 @@
+import Charts
 import SwiftUI
 
 /// Detail view for a single run: identity, status, live inference and evaluation progress.
@@ -146,11 +147,18 @@ public struct RunDetailView: View {
         let _ = state.problemResultsVersion[runId] ?? 0
         let rows = state.fetchRunProblemResults(runId: runId)
         if !rows.isEmpty {
-        let totalInferenceMs = rows.reduce(0) { $0 + $1.inferenceDurationMs }
-        let totalInputTokens = rows.compactMap(\.inferenceInputTokens).reduce(0, +)
-        let totalOutputTokens = rows.compactMap(\.inferenceOutputTokens).reduce(0, +)
-        let totalEvalMs = rows.compactMap(\.evalDurationMs).reduce(0, +)
-        Section("Inference summary") {
+            Section("Progress & results") {
+                runProgressChart(rows: rows, run: run)
+                passRateByLanguageChart(rows: rows)
+                avgInferenceTimeByLanguageChart(rows: rows)
+                avgEvalTimeByLanguageChart(rows: rows)
+                runSummaryStats(rows: rows)
+            }
+            let totalInferenceMs = rows.reduce(0) { $0 + $1.inferenceDurationMs }
+            let totalInputTokens = rows.compactMap(\.inferenceInputTokens).reduce(0, +)
+            let totalOutputTokens = rows.compactMap(\.inferenceOutputTokens).reduce(0, +)
+            let totalEvalMs = rows.compactMap(\.evalDurationMs).reduce(0, +)
+            Section("Inference summary") {
             LabeledContent("Total time", value: formatSeconds(totalInferenceMs))
             if totalInputTokens > 0 || totalOutputTokens > 0 {
                 LabeledContent("Input tokens", value: "\(totalInputTokens)")
@@ -193,6 +201,159 @@ public struct RunDetailView: View {
     /// Formats duration in milliseconds as seconds (e.g. "12.35 s").
     private func formatSeconds(_ ms: Int) -> String {
         String(format: "%.2f s", Double(ms) / 1000)
+    }
+
+    // MARK: - Progress & results charts
+
+    private func runProgressChart(rows: [ResultsStore.RunProblemResultRow], run: RunState) -> some View {
+        let progress = state.liveProgress[runId]
+        let inferenceTotal = progress?.inferenceTotal ?? state.problemCountForRun(run) ?? run.completedIndices.count
+        let inferenceCompleted = progress?.inferenceCompleted ?? rows.count
+        let inferenceTotalSafe = max(inferenceTotal, 1)
+        let evalRows = rows.filter { $0.evalPassed != nil }
+        let evalTotal = progress?.evaluationTotal ?? evalRows.count
+        let evalPassed = progress?.evaluationPassed ?? evalRows.filter(\.evalPassed!).count
+        let evalTotalSafe = max(evalTotal, 1)
+        struct ProgressPoint: Identifiable {
+            let id: String
+            let phase: String
+            let percent: Double
+        }
+        var points: [ProgressPoint] = [
+            ProgressPoint(id: "inference", phase: "Inference", percent: Double(inferenceCompleted) / Double(inferenceTotalSafe) * 100)
+        ]
+        if evalTotal > 0 {
+            points.append(ProgressPoint(id: "evaluation", phase: "Evaluation pass rate", percent: Double(evalPassed) / Double(evalTotalSafe) * 100))
+        }
+        return VStack(alignment: .leading, spacing: 12) {
+            Text("Run progress")
+                .font(.headline)
+            Chart(points) { item in
+                BarMark(
+                    x: .value("Phase", item.phase),
+                    y: .value("%", item.percent)
+                )
+            }
+            .chartYScale(domain: 0 ... 100)
+            .chartYAxisLabel("%")
+        }
+        .padding(16)
+        .glassCardStatic(cornerRadius: 12)
+    }
+
+    private func passRateByLanguageChart(rows: [ResultsStore.RunProblemResultRow]) -> some View {
+        let byLang: [String: (passed: Int, total: Int)] = Dictionary(grouping: rows.filter { $0.evalPassed != nil }, by: \.language)
+            .mapValues { langRows in
+                let passed = langRows.filter(\.evalPassed!).count
+                return (passed: passed, total: langRows.count)
+            }
+        let series: [(language: String, passRate: Double)] = byLang
+            .map { (language: $0.key, passRate: $0.value.total > 0 ? Double($0.value.passed) / Double($0.value.total) * 100 : 0) }
+            .sorted { $0.passRate > $1.passRate }
+        return VStack(alignment: .leading, spacing: 12) {
+            Text("Pass rate by language")
+                .font(.headline)
+            if series.isEmpty {
+                Text("No evaluation results yet.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Chart(series, id: \.language) { item in
+                    BarMark(
+                        x: .value("Pass rate %", item.passRate),
+                        y: .value("Language", item.language)
+                    )
+                }
+                .chartXScale(domain: 0 ... 100)
+                .chartXAxisLabel("Pass rate %")
+            }
+        }
+        .padding(16)
+        .glassCardStatic(cornerRadius: 12)
+    }
+
+    private func avgInferenceTimeByLanguageChart(rows: [ResultsStore.RunProblemResultRow]) -> some View {
+        let byLang: [String: [Int]] = Dictionary(grouping: rows, by: \.language)
+            .mapValues { $0.map(\.inferenceDurationMs) }
+        let series: [(language: String, avgSeconds: Double)] = byLang
+            .map { (language: $0.key, avgSeconds: $0.value.isEmpty ? 0 : Double($0.value.reduce(0, +)) / Double($0.value.count) / 1000) }
+            .sorted { $0.language < $1.language }
+        return VStack(alignment: .leading, spacing: 12) {
+            Text("Avg inference time per problem by language")
+                .font(.headline)
+            if series.isEmpty {
+                Text("No data.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Chart(series, id: \.language) { item in
+                    BarMark(
+                        x: .value("Language", item.language),
+                        y: .value("Seconds", item.avgSeconds)
+                    )
+                }
+                .chartYAxisLabel("Seconds")
+            }
+        }
+        .padding(16)
+        .glassCardStatic(cornerRadius: 12)
+    }
+
+    private func avgEvalTimeByLanguageChart(rows: [ResultsStore.RunProblemResultRow]) -> some View {
+        let byLang: [String: [Int]] = Dictionary(grouping: rows.filter { $0.evalDurationMs != nil }, by: \.language)
+            .mapValues { $0.compactMap(\.evalDurationMs) }
+        let series: [(language: String, avgSeconds: Double)] = byLang
+            .compactMap { language, msValues in
+                guard !msValues.isEmpty else { return nil }
+                return (language: language, avgSeconds: Double(msValues.reduce(0, +)) / Double(msValues.count) / 1000)
+            }
+            .sorted { $0.language < $1.language }
+        return VStack(alignment: .leading, spacing: 12) {
+            Text("Avg evaluation time per problem by language")
+                .font(.headline)
+            if series.isEmpty {
+                Text("No evaluation timing yet.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Chart(series, id: \.language) { item in
+                    BarMark(
+                        x: .value("Language", item.language),
+                        y: .value("Seconds", item.avgSeconds)
+                    )
+                }
+                .chartYAxisLabel("Seconds")
+            }
+        }
+        .padding(16)
+        .glassCardStatic(cornerRadius: 12)
+    }
+
+    private func runSummaryStats(rows: [ResultsStore.RunProblemResultRow]) -> some View {
+        let evaluated = rows.filter { $0.evalPassed != nil }
+        let passed = evaluated.filter(\.evalPassed!).count
+        let failed = evaluated.count - passed
+        let totalInferenceMs = rows.reduce(0) { $0 + $1.inferenceDurationMs }
+        let throughputPerMin: Double? = totalInferenceMs > 0 ? Double(rows.count) / (Double(totalInferenceMs) / 60_000) : nil
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("Summary")
+                .font(.headline)
+            if !evaluated.isEmpty {
+                HStack(spacing: 16) {
+                    Text("Passed: \(passed)")
+                        .font(.subheadline)
+                    Text("Failed: \(failed)")
+                        .font(.subheadline)
+                }
+            }
+            if let rate = throughputPerMin, rate > 0 {
+                Text("Throughput: \(String(format: "%.1f", rate)) problems/min")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(16)
+        .glassCardStatic(cornerRadius: 12)
     }
 
     private func statusText(_ status: RunStatus) -> String {

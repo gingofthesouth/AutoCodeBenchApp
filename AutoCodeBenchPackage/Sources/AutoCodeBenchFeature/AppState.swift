@@ -341,8 +341,6 @@ public final class AppState {
         errorMessage = nil
         resultsStore?.saveRun(state)
         liveProgress[runId] = LiveRunProgress(inferenceCompleted: 0, inferenceTotal: problems.count)
-        loadRuns()
-        pendingRunIdToSelect = runId
 
         let totalProblems = problems.count
         let continuation = evaluationQueueContinuation
@@ -401,6 +399,8 @@ public final class AppState {
             }
         }
         runningRunTasks[runId] = task
+        loadRuns()
+        pendingRunIdToSelect = runId
     }
 
     /// Returns a short, user-friendly message for inference/network errors (e.g. timeout).
@@ -493,6 +493,10 @@ public final class AppState {
             trimRunToProblem(runId: state.runId, startFromIndex: start)
             stateToUse = runs.first { $0.runId == state.runId } ?? state
         }
+        if runningRunTasks[state.runId] != nil {
+            errorMessage = "This run is already running."
+            return
+        }
         guard let providerConfig = providers.first(where: { $0.id == stateToUse.providerId }),
               let path = cachedDatasetPath else { return }
         let problems: [BenchmarkProblem]
@@ -543,7 +547,6 @@ public final class AppState {
         resultsStore?.saveRun(stateToPersist)
         liveProgress[runId] = LiveRunProgress(inferenceCompleted: stateToPersist.completedIndices.count, inferenceTotal: problems.count)
         bumpProblemResultsVersion(runId: runId)
-        loadRuns()
 
         runRunners[runId] = runner
         let continuation = evaluationQueueContinuation
@@ -601,6 +604,7 @@ public final class AppState {
             }
         }
         runningRunTasks[runId] = task
+        loadRuns()
     }
 
     public func pauseRun(runId: String) {

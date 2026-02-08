@@ -8,4 +8,9 @@ extension View {
     public func glassCard(cornerRadius: CGFloat = 12) -> some View {
         self.glassEffect(.regular.interactive(), in: .rect(cornerRadius: cornerRadius))
     }
+
+    /// Non-interactive glass card for display-only surfaces (charts, stat blocks). Use after layout and appearance modifiers.
+    public func glassCardStatic(cornerRadius: CGFloat = 12) -> some View {
+        self.glassEffect(.regular, in: .rect(cornerRadius: cornerRadius))
+    }
 }

@@ -18,7 +18,6 @@ public struct DashboardView: View {
                     .font(.largeTitle)
                     .bold()
                 summaryCards
-                .glassCard(cornerRadius: 12)
                 
                 if !state.resultsTable.isEmpty {
                     VStack(alignment: .leading, spacing: 16) {
@@ -86,7 +85,7 @@ public struct DashboardView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
-        .glassCard(cornerRadius: 12)
+        .glassCardStatic(cornerRadius: 12)
     }
     
     // MARK: - Pass@1 by Model (vertical histogram)
@@ -123,7 +122,7 @@ public struct DashboardView: View {
             .chartYAxisLabel("Pass@1 %")
         }
         .padding(16)
-        .glassCard(cornerRadius: 12)
+        .glassCardStatic(cornerRadius: 12)
         .frame(maxWidth: .infinity, minHeight: 400)
     }
     
@@ -293,7 +292,7 @@ public struct DashboardView: View {
             .chartYAxisLabel("Pass@1 %")
         }
         .padding(16)
-        .glassCard(cornerRadius: 12)
+        .glassCardStatic(cornerRadius: 12)
     }
     
     // MARK: - Pass@1 by language (existing horizontal)
@@ -315,7 +314,7 @@ public struct DashboardView: View {
             .chartXAxisLabel("Pass@1 %")
         }
         .padding(16)
-        .glassCard(cornerRadius: 12)
+        .glassCardStatic(cornerRadius: 12)
     }
     
     // MARK: - Run timing (time to complete, sorted lowest to highest)
@@ -356,7 +355,7 @@ public struct DashboardView: View {
             }
         }
         .padding(16)
-        .glassCard(cornerRadius: 12)
+        .glassCardStatic(cornerRadius: 12)
     }
     
     // MARK: - Token efficiency (tokens per problem by model)
@@ -390,7 +389,7 @@ public struct DashboardView: View {
             }
         }
         .padding(16)
-        .glassCard(cornerRadius: 12)
+        .glassCardStatic(cornerRadius: 12)
     }
     
     // MARK: - Inference speed (avg ms per problem by model)
@@ -421,7 +420,7 @@ public struct DashboardView: View {
             }
         }
         .padding(16)
-        .glassCard(cornerRadius: 12)
+        .glassCardStatic(cornerRadius: 12)
     }
 }
 
