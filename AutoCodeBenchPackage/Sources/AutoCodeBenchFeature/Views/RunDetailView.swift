@@ -12,6 +12,7 @@ public struct RunDetailView: View {
     @State private var selectedPassRateLanguage: String?
     @State private var selectedInferenceTimeLanguage: String?
     @State private var selectedEvalTimeLanguage: String?
+    @State private var outputPopoverItem: OutputPopoverItem?
 
     public init(runId: String, state: AppState, onDeleted: (() -> Void)? = nil) {
         self.runId = runId
@@ -51,10 +52,10 @@ public struct RunDetailView: View {
                         if !rows.isEmpty {
                             chartsAndResultsSection(rows: rows, run: run)
                             inferenceSummarySection(rows: rows)
-                            inferenceTableSection(rows: rows)
+                            inferenceTableSection(rows: rows, run: run)
                             if rows.contains(where: { $0.evalPassed != nil }) {
                                 evaluationSummarySection(rows: rows)
-                                evaluationTableSection(rows: rows)
+                                evaluationTableSection(rows: rows, run: run)
                             }
                         }
                     }
@@ -86,6 +87,27 @@ public struct RunDetailView: View {
                 onDismiss: { rerunLanguageSheetRun = nil }
             )
         }
+        .popover(item: $outputPopoverItem) { item in
+            VStack(alignment: .leading, spacing: 8) {
+                Text(item.title)
+                    .font(.headline)
+                ScrollView {
+                    Text(item.content)
+                        .font(.system(.body, design: .monospaced))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                        .padding()
+                }
+                .frame(minWidth: 400, minHeight: 300)
+            }
+            .padding()
+        }
+    }
+
+    private struct OutputPopoverItem: Identifiable {
+        let id = UUID()
+        let title: String
+        let content: String
     }
 
     // MARK: - Section views
@@ -243,7 +265,7 @@ public struct RunDetailView: View {
         }
     }
 
-    private func inferenceTableSection(rows: [ResultsStore.RunProblemResultRow]) -> some View {
+    private func inferenceTableSection(rows: [ResultsStore.RunProblemResultRow], run: RunState?) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Per-problem inference")
                 .font(.headline)
@@ -253,6 +275,28 @@ public struct RunDetailView: View {
                 TableColumn("Duration (s)") { r in Text(formatSeconds(r.inferenceDurationMs)).font(.system(.body, design: .monospaced)) }
                 TableColumn("In") { r in Text(r.inferenceInputTokens.map { "\($0)" } ?? "—").font(.system(.body, design: .monospaced)) }
                 TableColumn("Out") { r in Text(r.inferenceOutputTokens.map { "\($0)" } ?? "—").font(.system(.body, design: .monospaced)) }
+                TableColumn("") { r in
+                    HStack(spacing: 8) {
+                        Button("Raw") {
+                            guard let run, let path = run.outputPath,
+                                  let row = state.loadProblemOutput(outputPath: path, problemIndex: r.problemIndex),
+                                  let raw = row.output, !raw.isEmpty else { return }
+                            outputPopoverItem = OutputPopoverItem(title: "Raw inference", content: raw)
+                        }
+                        .buttonStyle(.borderless)
+                        Button("Code") {
+                            guard let run, let path = run.outputPath,
+                                  let row = state.loadProblemOutput(outputPath: path, problemIndex: r.problemIndex) else { return }
+                            let matched = EvaluationService.extractCode(
+                                from: row.output ?? "",
+                                language: row.language,
+                                canonicalSolution: row.canonicalSolution
+                            )
+                            outputPopoverItem = OutputPopoverItem(title: "Matched code", content: matched.isEmpty ? "(no code extracted)" : matched)
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                }
             }
             .frame(minHeight: 200, maxHeight: 400)
         }
@@ -267,7 +311,7 @@ public struct RunDetailView: View {
         }
     }
 
-    private func evaluationTableSection(rows: [ResultsStore.RunProblemResultRow]) -> some View {
+    private func evaluationTableSection(rows: [ResultsStore.RunProblemResultRow], run: RunState?) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Per-problem evaluation")
                 .font(.headline)
@@ -283,6 +327,44 @@ public struct RunDetailView: View {
                 TableColumn("Duration (s)") { row in
                     Text(row.evalDurationMs.map { formatSeconds($0) } ?? "—")
                         .font(.system(.body, design: .monospaced))
+                }
+                TableColumn("") { r in
+                    let reEvalKey = "\(runId)-\(r.problemIndex)"
+                    let isReEvaluating = state.reEvaluatingProblemKey == reEvalKey
+                    HStack(spacing: 8) {
+                        Button("Raw") {
+                            guard let run, let path = run.outputPath,
+                                  let row = state.loadProblemOutput(outputPath: path, problemIndex: r.problemIndex),
+                                  let raw = row.output, !raw.isEmpty else { return }
+                            outputPopoverItem = OutputPopoverItem(title: "Raw inference", content: raw)
+                        }
+                        .buttonStyle(.borderless)
+                        Button("Code") {
+                            guard let run, let path = run.outputPath,
+                                  let row = state.loadProblemOutput(outputPath: path, problemIndex: r.problemIndex) else { return }
+                            let matched = EvaluationService.extractCode(
+                                from: row.output ?? "",
+                                language: row.language,
+                                canonicalSolution: row.canonicalSolution
+                            )
+                            outputPopoverItem = OutputPopoverItem(title: "Matched code", content: matched.isEmpty ? "(no code extracted)" : matched)
+                        }
+                        .buttonStyle(.borderless)
+                        if isReEvaluating {
+                            ProgressView()
+                                .scaleEffect(0.7)
+                            Text("Evaluating…")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Button("Re-evaluate") {
+                                guard let run, let path = run.outputPath else { return }
+                                Task { await state.evaluateSingleProblem(runId: run.runId, outputPath: path, problemIndex: r.problemIndex) }
+                            }
+                            .buttonStyle(.borderless)
+                            .accessibilityLabel("Re-evaluate")
+                        }
+                    }
                 }
             }
             .frame(minHeight: 200, maxHeight: 400)

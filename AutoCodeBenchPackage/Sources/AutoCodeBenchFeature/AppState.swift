@@ -30,6 +30,8 @@ public final class AppState {
     public var isRunningEvaluation = false
     /// Run ID currently being evaluated (for showing progress in RunDetailView).
     public var currentEvaluatingRunId: String?
+    /// When non-nil, "runId-problemIndex" of the row currently being re-evaluated (single-row re-eval).
+    public var reEvaluatingProblemKey: String?
     /// When true, evaluation runs when inference completes (batch). When false, each answer is enqueued for evaluation (global queue).
     public var evaluateWhenRunCompletes: Bool = true
     /// Run-level options for new runs (temperature, model kind, quantization, max output tokens).
@@ -767,6 +769,37 @@ public final class AppState {
         }
     }
 
+    /// Re-evaluates a single problem: runs sandbox evaluation for that row and overwrites pass/fail and duration; updates run aggregate for that language.
+    public func evaluateSingleProblem(runId: String, outputPath: String, problemIndex: Int) async {
+        guard let row = loadProblemOutput(outputPath: outputPath, problemIndex: problemIndex) else {
+            errorMessage = "Could not load problem output."
+            return
+        }
+        if row.output?.isEmpty != false {
+            errorMessage = "No model output to evaluate for this problem."
+            return
+        }
+        let key = "\(runId)-\(problemIndex)"
+        reEvaluatingProblemKey = key
+        defer { reEvaluatingProblemKey = nil }
+        do {
+            let (passed, duration) = try await evaluationService.evaluateRow(row)
+            let durationMs = Int(duration * 1000)
+            resultsStore?.saveEvalProblemResult(runId: runId, problemIndex: problemIndex, language: row.language, passed: passed, durationMs: durationMs)
+            let allRows = resultsStore?.fetchRunProblemResults(runId: runId) ?? []
+            let langRows = allRows.filter { $0.language == row.language }
+            let total = langRows.count
+            let passedCount = langRows.filter { $0.evalPassed == true }.count
+            resultsStore?.updateResult(runId: runId, language: row.language, total: total, passed: passedCount)
+            bumpProblemResultsVersion(runId: runId)
+            loadRuns()
+            refreshResults()
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     public func refreshResults() {
         if isPreviewMode { return }
         resultsTable = resultsStore?.fetchAllResults() ?? []
@@ -930,6 +963,16 @@ public final class AppState {
 
     public func fetchRunProblemResults(runId: String) -> [ResultsStore.RunProblemResultRow] {
         resultsStore?.fetchRunProblemResults(runId: runId) ?? []
+    }
+
+    /// Loads the problem row from the run's output file (for raw/matched popover).
+    public func loadProblemOutput(outputPath: String, problemIndex: Int) -> BenchmarkRow? {
+        guard FileManager.default.fileExists(atPath: outputPath) else { return nil }
+        let url = URL(fileURLWithPath: outputPath)
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        let lines = data.split(separator: UInt8(ascii: "\n"))
+        guard problemIndex >= 0, problemIndex < lines.count else { return nil }
+        return try? JSONDecoder().decode(BenchmarkRow.self, from: Data(lines[problemIndex]))
     }
 
     /// Call after saving inference or eval problem results so RunDetailView refetches.

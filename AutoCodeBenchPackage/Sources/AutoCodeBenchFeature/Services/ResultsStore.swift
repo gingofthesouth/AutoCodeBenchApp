@@ -342,6 +342,38 @@ public final class ResultsStore: Sendable {
         }
     }
 
+    /// Updates the aggregate result for (run_id, language). If no row exists, inserts one (e.g. after single-row re-eval).
+    public func updateResult(runId: String, language: String, total: Int, passed: Int) {
+        let passAt1 = total > 0 ? Double(passed) / Double(total) : 0
+        queue.async { [weak self] in
+            guard let self else { return }
+            var db: OpaquePointer?
+            guard sqlite3_open_v2(self.dbPath.path, &db, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK else { return }
+            defer { sqlite3_close(db) }
+            let updateSql = "UPDATE run_results SET total=?, passed=?, pass_at_1=? WHERE run_id=? AND language=?;"
+            var updateStmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, updateSql, -1, &updateStmt, nil) == SQLITE_OK else { return }
+            defer { sqlite3_finalize(updateStmt) }
+            sqlite3_bind_int(updateStmt, 1, Int32(total))
+            sqlite3_bind_int(updateStmt, 2, Int32(passed))
+            sqlite3_bind_double(updateStmt, 3, passAt1)
+            sqlite3_bind_text(updateStmt, 4, runId, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_text(updateStmt, 5, language, -1, SQLITE_TRANSIENT)
+            sqlite3_step(updateStmt)
+            if sqlite3_changes(db) == 0 {
+                var insertStmt: OpaquePointer?
+                guard sqlite3_prepare_v2(db, "INSERT INTO run_results (run_id, language, total, passed, pass_at_1) VALUES (?,?,?,?,?);", -1, &insertStmt, nil) == SQLITE_OK else { return }
+                defer { sqlite3_finalize(insertStmt) }
+                sqlite3_bind_text(insertStmt, 1, runId, -1, SQLITE_TRANSIENT)
+                sqlite3_bind_text(insertStmt, 2, language, -1, SQLITE_TRANSIENT)
+                sqlite3_bind_int(insertStmt, 3, Int32(total))
+                sqlite3_bind_int(insertStmt, 4, Int32(passed))
+                sqlite3_bind_double(insertStmt, 5, passAt1)
+                sqlite3_step(insertStmt)
+            }
+        }
+    }
+
     public struct ResultRow: Sendable, Identifiable {
         public var id: String { "\(runId)-\(language)" }
         public let runId: String
